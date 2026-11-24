@@ -44,3 +44,4 @@ textarea{font:inherit;color:var(--ink);background:var(--card);border:1px solid v
 .chip.m-distress{background:#fde7d9;color:#9a3412}.chip.m-life{background:#f4ebff;color:#6941c6}.chip.m-owner{background:var(--chip)}.chip.m-money{background:#dcfae6;color:var(--ok)}
 .motiv{margin:-6px 0 12px}
 @media (prefers-color-scheme:dark){.mrow.on-all{background:#123d26}.mrow.on-any{background:#4a3410}.mrow.on-none{background:#4a1c1a}.chip.m-distress{background:#4a2615;color:#fdba8c}.chip.m-life{background:#2e1f5e;color:#d6bbfb}.chip.m-money{background:#123d26;color:#75e0a7}}
+.runlog{max-height:320px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:12px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap}.runlog .err{color:var(--err)}.runlog .ok{color:var(--ok);font-weight:600}

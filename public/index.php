@@ -351,7 +351,7 @@ switch (true) {
             }
             $row[] = $emails[0]['address'] ?? '';
             $row[] = $emails[1]['address'] ?? '';
-            array_push($row, Pipeline::label($p['status']), $p['exclusive_client'] ?? '', $p['delivered_at'] ? when($p['delivered_at'], 'Y-m-d H:i') : '', $p['delivery_channel'] ?? '');
+            array_push($row, Pipeline::label($p['status']), $p['exclusive_client'] ?? '', $p['delivered_at'] ? when($p['delivered_at'], 'Y-m-d H:i T') : '', $p['delivery_channel'] ?? '');
             fputcsv($out, $row, ',', '"', '\\');
         }
         fclose($out);
@@ -418,6 +418,18 @@ switch (true) {
         Auth::audit('settings_saved', json_encode($_POST['trace_min_score'] ?? null));
         View::flash('Settings saved.');
         View::redirect('/admin');
+
+    case $path === '/admin/run.json' && $method === 'POST':
+        // one ~50 s round of jobs; the Admin page calls this repeatedly until `pending` is empty
+        Auth::require(true);
+        ignore_user_abort(true);
+        $budget = max(20, min(50, ((int)ini_get('max_execution_time') ?: 60) - 10));
+        $log = (new Jobs($budget))->run();
+        $pending = Jobs::pending();
+        Auth::audit('run_jobs', implode(' · ', $log));
+        header('Content-Type: application/json');
+        echo json_encode(['log' => $log, 'pending' => $pending, 'done' => !$pending, 'time' => when(gmdate('Y-m-d H:i:s'), 'g:i:s a T')]);
+        exit;
 
     case $path === '/admin/run' && $method === 'POST':
         Auth::require(true);

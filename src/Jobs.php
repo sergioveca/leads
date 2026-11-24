@@ -65,6 +65,42 @@ final class Jobs
         return $this->log;
     }
 
+    /**
+     * Work still waiting, for "Run all jobs until done": data passes not finished today, Detroit parcels
+     * never synced, leads waiting for a score, and list counts older than an hour. Empty = all caught up.
+     *
+     * @return array<string,string> job => what is left
+     */
+    public static function pending(): array
+    {
+        $left = [];
+        $states = [];
+        foreach (Db::all('SELECT * FROM job_state') as $s) {
+            $states[$s['job']] = $s;
+        }
+        $fresh = static fn(?array $s, int $secs): bool => $s && $s['last_success_at'] && strtotime($s['last_success_at'] . ' UTC') > time() - $secs;
+        foreach (array_merge([DetroitBlight::JOB], array_keys(DetroitSignals::sources())) as $job) {
+            $s = $states[$job] ?? null;
+            if (($s['cursor_value'] ?? null) !== null) {
+                $left[$job] = 'in progress';
+            } elseif (!$fresh($s, 20 * 3600)) {
+                $left[$job] = 'not run today';
+            }
+        }
+        $unsynced = (int)Db::val("SELECT COUNT(*) FROM properties WHERE municipality = 'DETROIT' AND parcel_synced_at IS NULL");
+        if ($unsynced > 0) {
+            $left['detroit_parcels'] = number_format($unsynced) . ' parcels without owner data';
+        }
+        $unscored = (int)Db::val('SELECT COUNT(*) FROM properties WHERE needs_score = 1');
+        if ($unscored > 0) {
+            $left['scoring'] = number_format($unscored) . ' leads to score';
+        }
+        if (!$fresh($states['list_counts'] ?? null, 3600)) {
+            $left['list_counts'] = 'counts older than an hour';
+        }
+        return $left;
+    }
+
     private function state(string $job): array
     {
         $s = Db::one('SELECT * FROM job_state WHERE job = ?', [$job]);

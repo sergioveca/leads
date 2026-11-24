@@ -25,7 +25,13 @@ page /leads "Working pool"
 page "/leads?view=delivered&status=any&sort=delivered" "Delivered to clients"
 page "/leads?view=all&status=dead&min=0" "Dead / not interested"
 page "/lead?id=$PID" "Exclusive to"
-page /admin "Scheduled jobs"
+page /admin "Run all jobs until done"
+page /admin " EST"
+
+# one round of "Run all jobs until done" (real jobs, ~50 s) answers with JSON listing what is left
+TOKEN=$(curl -sS -b "$JAR" -c "$JAR" "$BASE/admin" | csrf)
+RUN=$(curl -sS -b "$JAR" -c "$JAR" --max-time 90 --data-urlencode "_csrf=$TOKEN" "$BASE/admin/run.json")
+if grep -q '"pending"' <<<"$RUN" && grep -q '"log"' <<<"$RUN"; then echo "ok   POST /admin/run.json: $(cut -c1-300 <<<"$RUN")"; else echo "FAIL /admin/run.json: $(cut -c1-300 <<<"$RUN")"; fails=$((fails+1)); fi
 page /lists "Tired landlords"
 page "/leads?m%5Blandlord%5D=all&m%5Bblight%5D=any&m%5Bfire%5D=any&min=0" "Motivators"
 page "/leads?stack=2&min=0&ptype=house" "Save list"

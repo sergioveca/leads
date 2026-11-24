@@ -20,7 +20,44 @@
       <tr><td><?= e($j['job']) ?><div class="mute small"><?= e($j['message']) ?></div></td><td class="status-<?= e($j['status']) ?>"><?= e($j['status']) ?></td><td class="small nowrap"><?= e(when($j['last_success_at'])) ?></td></tr>
       <?php endforeach; ?>
     </table>
-    <form method="post" action="/admin/run"><?= csrf_field() ?><p><button class="secondary">Run jobs now (≈50 s)</button></p></form>
+    <?php $pending = \Leads\Jobs::pending(); ?>
+    <p class="small <?= $pending ? '' : 'mute' ?>" id="pending-now"><?= $pending ? '<b>Waiting:</b> ' . e(implode(' · ', array_map(static fn($k, $v) => "$k ($v)", array_keys($pending), $pending))) : 'All caught up.' ?></p>
+    <p><button type="button" id="runall" data-csrf="<?= e(\Leads\Auth::csrf()) ?>">Run all jobs until done</button>
+      <button type="button" id="runstop" class="secondary" hidden>Stop</button></p>
+    <div id="runlog" class="runlog" hidden></div>
+    <script>
+    (() => {
+      const btn = document.getElementById('runall'), stop = document.getElementById('runstop'), out = document.getElementById('runlog');
+      let stopped = false;
+      const line = (t, cls) => { const d = document.createElement('div'); if (cls) d.className = cls; d.textContent = t; out.appendChild(d); out.scrollTop = out.scrollHeight; };
+      stop.onclick = () => { stopped = true; line('Stopping after this round…'); };
+      btn.onclick = async () => {
+        btn.disabled = true; stop.hidden = false; out.hidden = false; out.textContent = ''; stopped = false;
+        let errors = 0;
+        for (let round = 1; round <= 60 && !stopped; round++) {
+          line(`Round ${round}: running (up to ~50 s)…`, 'mute');
+          let r;
+          try {
+            const res = await fetch('/admin/run.json', {method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: '_csrf=' + encodeURIComponent(btn.dataset.csrf)});
+            r = await res.json();
+          } catch (e) {
+            if (++errors >= 3) { line('Stopped: the server did not answer 3 times. Try again in a few minutes.', 'err'); break; }
+            line('No answer from the server (it may still be working); retrying in 20 s…', 'err');
+            await new Promise(ok => setTimeout(ok, 20000));
+            continue;
+          }
+          (r.log || []).forEach(l => line('  ' + l, /ERROR/.test(l) ? 'err' : ''));
+          if (r.done) { line(`All caught up at ${r.time}. Reloading…`, 'ok'); setTimeout(() => location.reload(), 1500); return; }
+          line('  Still waiting: ' + Object.entries(r.pending).map(([k, v]) => `${k} (${v})`).join(' · '), 'mute');
+          errors = (r.log || []).some(l => /ERROR/.test(l)) ? errors + 1 : 0;
+          if (errors >= 3) { line('Stopped: the same job failed 3 rounds in a row. See the job list for the error.', 'err'); break; }
+          if ((r.log || []).some(l => /in progress; skipped/.test(l))) { line('  The scheduled task is running right now; waiting 30 s…', 'mute'); await new Promise(ok => setTimeout(ok, 30000)); }
+        }
+        btn.disabled = false; stop.hidden = true;
+        line('Finished. Reload the page to see the job list.', 'mute');
+      };
+    })();
+    </script>
   </div>
 </div>
 

@@ -7,9 +7,9 @@ declare(strict_types=1);
  */
 
 define('LEADS_ROOT', __DIR__);
-define('LEADS_VERSION', '1.2.0');
+define('LEADS_VERSION', '1.2.1');
 
-date_default_timezone_set('America/Detroit');
+date_default_timezone_set('America/New_York'); // Miami time (Eastern), shown with EST/EDT
 mb_internal_encoding('UTF-8');
 
 spl_autoload_register(static function (string $class): void {

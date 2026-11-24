@@ -16,8 +16,8 @@ function phone_fmt(string $n): string
     return strlen($n) === 10 ? sprintf('(%s) %s-%s', substr($n, 0, 3), substr($n, 3, 3), substr($n, 6)) : $n;
 }
 
-/** UTC datetime string -> local (Detroit) display */
-function when(?string $utc, string $fmt = 'M j, Y g:i a'): string
+/** UTC datetime string -> Miami time (Eastern) display, e.g. "Nov 24, 2026 6:44 pm EST" */
+function when(?string $utc, string $fmt = 'M j, Y g:i a T'): string
 {
     if (!$utc) {
         return '—';
