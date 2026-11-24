@@ -51,7 +51,8 @@ The server can't parse PDFs (no pdftotext or Python on the Plesk host), so GitHu
    April 1 that drops to +25.
 
 **If it fails** (page moved, Akamai blocks the runner, PDF layout changed, validation failed), nothing is committed
-and GitHub emails the repo owner. Run it manually from Actions → Treasurer list → *Run workflow*. It can take a `year`,
+and the workflow opens a GitHub issue "Treasurer list import failed" assigned to the repo owner (GitHub emails
+issues; the owner's Actions emails are turned off to avoid CI noise). The next successful run closes it. Run it manually from Actions → Treasurer list → *Run workflow*. It can take a `year`,
 a direct `pdf_url`, `dry_run` and `force`. Or on a PC with Python and poppler:
 `python3 tools/fetch_treasurer_list.py --year 2027`, then commit and push.
 
