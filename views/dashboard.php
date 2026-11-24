@@ -42,6 +42,20 @@
       </table>
     </div>
     <div class="card">
+      <h2 style="margin-top:0">Pipeline</h2>
+      <?php $byStatus = array_column($pipeline, 'n', 'status'); ?>
+      <div class="actions"><?php foreach (\Leads\Pipeline::STATUSES as $k => $label): if ($k === 'new' || empty($byStatus[$k])) continue; ?>
+        <a class="chip st-<?= e($k) ?>" href="/leads?view=all&amp;status=<?= e($k) ?>&amp;min=0&amp;sort=status"><?= e($label) ?>: <?= number_format((int)$byStatus[$k]) ?></a>
+      <?php endforeach; ?><?php if (count(array_diff_key($byStatus, ['new' => 1])) === 0): ?><span class="mute small">No leads worked yet. Set a status or add a note on a lead.</span><?php endif; ?></div>
+      <table style="margin-top:10px">
+        <tr><th>Delivered to</th><th class="right">Total</th><th class="right">Last 30 days</th><th class="right">Closed</th><th class="right">Dead</th></tr>
+        <?php foreach ($deliveries as $d): ?>
+        <tr><td><a href="/leads?view=delivered&amp;client=<?= (int)$d['id'] ?>&amp;status=any&amp;sort=delivered"><?= e($d['name']) ?></a></td><td class="right"><?= number_format((int)$d['n']) ?></td><td class="right"><?= number_format((int)$d['n30']) ?></td><td class="right"><?= number_format((int)$d['closed']) ?></td><td class="right"><?= number_format((int)$d['dead']) ?></td></tr>
+        <?php endforeach; ?>
+        <?php if (!$deliveries): ?><tr><td colspan="5" class="mute">No leads delivered yet.</td></tr><?php endif; ?>
+      </table>
+    </div>
+    <div class="card">
       <h2 style="margin-top:0">Recent skip traces</h2>
       <table>
         <tr><th>When</th><th>Account</th><th>Result</th></tr>

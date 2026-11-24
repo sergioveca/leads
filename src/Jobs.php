@@ -45,6 +45,12 @@ final class Jobs
         $this->daily('treasurer_watch', fn() => Treasurer::watch());
         $this->blight();
         $this->loop('detroit_parcels', fn() => DetroitParcels::batch(150), 6);
+        // Scores depend on today's date (tax foreclosure date passed? ticket in last 12 months?),
+        // so everything is rescored once a month; April 1 turns "foreclosure pending" (+45) into +25.
+        if (Db::setting('rescore_month') !== date('Y-m')) {
+            Db::run('UPDATE properties SET needs_score = 1');
+            Db::setSetting('rescore_month', date('Y-m'));
+        }
         $this->loop('scoring', fn() => Scoring::rescore(5000), 2);
         $this->autoTrace();
         $this->daily('dnc_recheck', fn() => 'checked ' . SkipTrace::recheckDnc(1000) . ' numbers', 20);
@@ -166,7 +172,8 @@ final class Jobs
             $msgs = [];
             while ($this->left() > 25) {
                 $ids = array_column(Db::all(
-                    'SELECT parcel_id FROM properties WHERE is_excluded = 0 AND score >= ? AND traced_at IS NULL
+                    'SELECT parcel_id FROM properties WHERE is_excluded = 0 AND score >= ? AND traced_at IS NULL AND exclusive_client_id IS NULL
+                     AND status NOT IN (\'dead\', \'closed\')
                      AND (municipality <> \'DETROIT\' OR parcel_synced_at IS NOT NULL) ORDER BY score DESC LIMIT ' . $batch,
                     [$min]
                 ), 'parcel_id');

@@ -2,7 +2,54 @@
 <p><a href="/leads">← Leads</a></p>
 <h1><span class="score <?= score_class((int)$p['score']) ?>"><?= (int)$p['score'] ?></span> <?= e($p['address'] ?: $p['parcel_id']) ?> <span class="mute small"><?= e($p['municipality']) ?> <?= e($p['zip'] ?? '') ?></span></h1>
 <?php if ((int)$p['is_excluded'] === 1): ?><div class="flash err">Excluded from leads: <?= e($p['exclude_reason']) ?></div><?php endif; ?>
+<?php if ($p['exclusive_client_id'] !== null): ?>
+<div class="flash excl">Exclusive to <b><?= e($p['exclusive_client'] ?? 'a client') ?></b> · delivered <?= e(when($p['delivered_at'])) ?> via <?= e(\Leads\Pipeline::CHANNELS[$p['delivery_channel']] ?? $p['delivery_channel'] ?? '—') ?>.
+  <?= $canWork ? '' : 'Read-only for you: no skip trace or DealMachine push. Record the client\'s outcome below.' ?></div>
+<?php endif; ?>
 
+<div class="card">
+  <h2 style="margin-top:0">Pipeline <span class="chip st-<?= e($p['status']) ?>"><?= e(\Leads\Pipeline::label($p['status'])) ?></span><?php if ($p['status_at']): ?> <span class="mute small">since <?= e(when($p['status_at'])) ?></span><?php endif; ?></h2>
+  <?php if ($canEdit): ?>
+  <form method="post" action="/lead/update" class="filters">
+    <?= csrf_field() ?><input type="hidden" name="id" value="<?= e($p['parcel_id']) ?>">
+    <label>Status<select name="status"><?php foreach (\Leads\Pipeline::STATUSES as $k => $label): ?><option value="<?= e($k) ?>" <?= $p['status'] === $k ? 'selected' : '' ?>><?= e($label) ?></option><?php endforeach; ?></select></label>
+    <label style="flex:1;min-width:240px">Note<textarea name="note" rows="2" placeholder="Call notes, motivation, asking price, what the client reported…"></textarea></label>
+    <button>Save</button>
+  </form>
+  <?php endif; ?>
+  <?php if ($isAdmin && $p['exclusive_client_id'] === null && $clients): ?>
+  <form method="post" action="/deliver" class="filters" style="margin-top:10px" onsubmit="return confirm('Deliver this lead? It becomes exclusive to the client and leaves the 4Return pool.')">
+    <?= csrf_field() ?><input type="hidden" name="ids[]" value="<?= e($p['parcel_id']) ?>"><input type="hidden" name="back" value="<?= e($back) ?>">
+    <label>Deliver to<select name="client_id"><?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>"><?= e($c['name']) ?></option><?php endforeach; ?></select></label>
+    <label>Via<select name="channel"><?php foreach (\Leads\Pipeline::CHANNELS as $k => $label): ?><option value="<?= e($k) ?>"><?= e($label) ?></option><?php endforeach; ?></select></label>
+    <label style="flex:1;min-width:200px">Delivery note<input type="text" name="note" placeholder="Optional, e.g. Podio item link"></label>
+    <button class="secondary">Deliver (exclusive)</button>
+  </form>
+  <?php elseif ($isAdmin && $p['exclusive_client_id'] !== null): ?>
+  <form method="post" action="/lead/release" class="filters" style="margin-top:10px" onsubmit="return confirm('Release exclusivity? The lead returns to the 4Return pool.')">
+    <?= csrf_field() ?><input type="hidden" name="id" value="<?= e($p['parcel_id']) ?>">
+    <label style="flex:1;min-width:200px">Reason<input type="text" name="note" placeholder="e.g. client passed on it"></label>
+    <button class="link small">Release exclusivity</button>
+  </form>
+  <?php endif; ?>
+  <?php if ($events): ?>
+  <table class="timeline" style="margin-top:12px">
+    <?php foreach ($events as $ev): ?>
+    <tr>
+      <td class="nowrap small mute"><?= e(when($ev['created_at'])) ?><div><?= e($ev['email'] ?? 'system') ?></div></td>
+      <td class="small"><?php
+        if ($ev['kind'] === 'status') { echo 'Status <b>' . e(\Leads\Pipeline::label($ev['old_status'])) . '</b> → <b>' . e(\Leads\Pipeline::label($ev['new_status'])) . '</b>'; }
+        elseif ($ev['kind'] === 'delivered') { echo '<b>Delivered to ' . e($ev['client_name'] ?? '?') . '</b> (exclusive)'; }
+        elseif ($ev['kind'] === 'released') { echo '<b>Exclusivity released</b> (was ' . e($ev['client_name'] ?? '?') . ')'; }
+        else { echo '<b>Note</b>'; } ?>
+        <?php if ($ev['body'] !== null && $ev['body'] !== ''): ?><div class="note"><?= nl2br(e($ev['body'])) ?></div><?php endif; ?></td>
+    </tr>
+    <?php endforeach; ?>
+  </table>
+  <?php else: ?><p class="mute small" style="margin-bottom:0">No notes yet.</p><?php endif; ?>
+</div>
+
+<?php if ($canWork): ?>
 <div class="actions" style="margin-bottom:14px">
   <form method="post" action="/trace"><?= csrf_field() ?><input type="hidden" name="ids[]" value="<?= e($p['parcel_id']) ?>"><input type="hidden" name="back" value="<?= e($back) ?>">
     <?php if ($p['traced_at']): ?><input type="hidden" name="force" value="1"><button class="secondary">Re-trace</button><?php else: ?><button>Skip trace now</button><?php endif; ?></form>
@@ -11,6 +58,7 @@
   <?php endif; ?>
   <span class="mute small"><?= $p['traced_at'] ? 'Traced ' . e(when($p['traced_at'])) : 'Not traced yet' ?></span>
 </div>
+<?php endif; ?>
 
 <div class="grid2">
   <div>

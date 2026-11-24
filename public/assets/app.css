@@ -29,3 +29,10 @@ dl.kv{display:grid;grid-template-columns:160px 1fr;gap:6px 12px;margin:0}dl.kv d
 .foot{max-width:1280px;margin:10px auto 30px;padding:0 16px;color:var(--mute);font-size:12px}
 .status-ok{color:var(--ok)}.status-error{color:var(--err)}.status-running{color:var(--warm)}
 @media(max-width:700px){dl.kv{grid-template-columns:1fr}.hide-sm{display:none}}
+textarea{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:7px;padding:7px 9px;width:100%;resize:vertical}
+.tabs{display:flex;gap:4px;margin:-4px 0 12px}.tabs a{padding:6px 12px;border-radius:7px;color:var(--mute);border:1px solid transparent}.tabs a.on{background:var(--card);border-color:var(--line);color:var(--ink);font-weight:600}
+.sep{width:1px;align-self:stretch;background:var(--line);margin:0 4px}
+.flash.excl{background:#e0eaff;color:#1d3a8a}.chip.excl{background:#e0eaff;color:#1d3a8a}
+.chip.st-contacted,.chip.st-appointment{background:#fef0c7;color:#93370d}.chip.st-offer,.chip.st-under_contract{background:#d1e9ff;color:#1849a9}.chip.st-closed{background:#dcfae6;color:var(--ok)}.chip.st-dead{background:var(--chip);color:var(--mute);text-decoration:line-through}
+@media (prefers-color-scheme:dark){.flash.excl,.chip.excl{background:#1c2a52;color:#b2ccff}.chip.st-contacted,.chip.st-appointment{background:#4a3410;color:#fedf89}.chip.st-offer,.chip.st-under_contract{background:#102a56;color:#b2ddff}.chip.st-closed{background:#123d26;color:#75e0a7}}
+.timeline td{border-bottom:1px dashed var(--line)}.timeline .note{margin-top:3px;white-space:normal;color:var(--ink)}

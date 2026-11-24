@@ -7,7 +7,7 @@ declare(strict_types=1);
  */
 
 define('LEADS_ROOT', __DIR__);
-define('LEADS_VERSION', '1.0.0');
+define('LEADS_VERSION', '1.1.0');
 
 date_default_timezone_set('America/Detroit');
 mb_internal_encoding('UTF-8');

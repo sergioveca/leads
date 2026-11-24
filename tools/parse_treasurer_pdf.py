@@ -27,8 +27,9 @@ NOISE = re.compile(
 ADDRESS = re.compile(r"^\d+[A-Z]?(?:-\d+)?\s+\S")
 
 
-def main(pdf, year, out):
-    raw = subprocess.run(["pdftotext", "-raw", pdf, "-"], capture_output=True, text=True, check=True).stdout
+def parse(pdf, year, out):
+    """Parses `pdf` into the CSV `out`. Returns {"rows", "detroit", "no_address"}."""
+    raw =subprocess.run(["pdftotext", "-raw", pdf, "-"], capture_output=True, text=True, check=True).stdout
     lines = [l.strip() for l in raw.splitlines()]
     rows, cur, muni = [], None, ""
     for line in lines:
@@ -90,7 +91,13 @@ def main(pdf, year, out):
             w.writerow([r["parcel_id"], r["address"], r["municipality"], "; ".join(r["parties"]), year])
     det = sum(1 for r in out_rows if r["municipality"] == "DETROIT")
     noaddr = sum(1 for r in out_rows if not r["address"])
-    print(f"{len(out_rows)} parcels ({det} Detroit, {len(out_rows) - det} other), {noaddr} without address -> {out}")
+    return {"rows": len(out_rows), "detroit": det, "no_address": noaddr}
+
+
+def main(pdf, year, out):
+    s = parse(pdf, year, out)
+    print(f"{s['rows']} parcels ({s['detroit']} Detroit, {s['rows'] - s['detroit']} other), "
+          f"{s['no_address']} without address -> {out}")
 
 
 if __name__ == "__main__":

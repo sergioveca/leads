@@ -1,0 +1,85 @@
+# Checks every push and pull request: PHP lint, an end-to-end run against MariaDB 10.11
+# (migrations, Treasurer import, scoring, lead pipeline, web pages), and a live dry run of the
+# Treasurer list fetcher (parses the current list from the county site, writes nothing).
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: leads_test
+          MARIADB_USER: leads
+          MARIADB_PASSWORD: leads
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: pdo_mysql, curl, sodium, mbstring
+          ini-values: memory_limit=128M
+          coverage: none
+
+      - name: PHP lint
+        run: for f in $(git ls-files '*.php'); do php -l "$f" > /dev/null || exit 1; done
+
+      - name: Python syntax
+        run: python3 -m py_compile tools/*.py
+
+      - name: Test settings
+        run: |
+          cat > .env <<'EOF'
+          APP_DEBUG=true
+          DB_HOST=127.0.0.1
+          DB_PORT=3306
+          DB_DATABASE=leads_test
+          DB_USERNAME=leads
+          DB_PASSWORD=leads
+          ADMIN_EMAIL=ci@example.com
+          ADMIN_INITIAL_PASSWORD=ci-password
+          DEALMACHINE_API_KEY=
+          APP_KEY=ci_app_key_0123456789abcdef0123456789
+          HEALTH_TOKEN=ci_health_0123456789abcdef0123456789
+          CRON_TOKEN=ci_cron_0123456789abcdef0123456789
+          EOF
+
+      - name: Smoke test (migrations, import, scoring, pipeline)
+        run: php tests/smoke.php
+
+      - name: Web pages
+        run: |
+          php -S 127.0.0.1:8080 -t public public/index.php > /tmp/php-server.log 2>&1 &
+          sleep 1
+          bash tests/http_smoke.sh http://127.0.0.1:8080 ci@example.com ci-password "$(cat storage/cache/smoke_parcel.txt)"
+
+      - name: Server log
+        if: always()
+        run: cat /tmp/php-server.log storage/logs/* 2>/dev/null | tail -50
+
+  treasurer-fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
+      - name: Dry run against the live 2026 list
+        run: |
+          python3 tools/fetch_treasurer_list.py --year 2026 --dry-run | tee out.txt
+          expected=$(($(wc -l < data/treasurer/wayne_forfeited_2026.csv) - 1))
+          grep -q "Parsed $expected parcels" out.txt || { echo "Parsed count differs from the committed CSV ($expected)"; exit 1; }

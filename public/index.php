@@ -6,6 +6,7 @@ use Leads\Db;
 use Leads\Env;
 use Leads\Jobs;
 use Leads\LeadQuery;
+use Leads\Pipeline;
 use Leads\SkipTrace;
 use Leads\View;
 
@@ -126,31 +127,39 @@ switch (true) {
             'cap' => SkipTrace::monthlyCap(null),
         ];
         $jobs = Db::all('SELECT * FROM job_state ORDER BY job');
-        $top = Db::all('SELECT parcel_id, address, municipality, owner1, score, score_reasons, dm_matched FROM properties WHERE is_excluded = 0 ORDER BY score DESC LIMIT 10');
+        $top = Db::all('SELECT parcel_id, address, municipality, owner1, score, score_reasons, dm_matched FROM properties WHERE is_excluded = 0 AND exclusive_client_id IS NULL AND status NOT IN (\'dead\', \'closed\') ORDER BY score DESC LIMIT 10');
         $runs = Db::all('SELECT r.*, c.name AS client FROM skiptrace_runs r LEFT JOIN clients c ON c.id = r.client_id ORDER BY r.id DESC LIMIT 8');
-        View::render('dashboard', compact('stats', 'jobs', 'top', 'runs') + ['newList' => Db::setting('treasurer_latest_published')], 'Dashboard');
+        // pipeline: status counts for leads being worked (anything moved past "new") and deliveries per client
+        $pipeline = Db::all("SELECT status, COUNT(*) n FROM properties WHERE status <> 'new' OR exclusive_client_id IS NOT NULL GROUP BY status");
+        $deliveries = Db::all(
+            "SELECT c.id, c.name, COUNT(*) n, SUM(p.delivered_at >= UTC_TIMESTAMP() - INTERVAL 30 DAY) n30,
+                    SUM(p.status = 'closed') closed, SUM(p.status = 'dead') dead
+             FROM properties p JOIN clients c ON c.id = p.exclusive_client_id GROUP BY c.id, c.name ORDER BY n DESC"
+        );
+        View::render('dashboard', compact('stats', 'jobs', 'top', 'runs', 'pipeline', 'deliveries') + ['newList' => Db::setting('treasurer_latest_published')], 'Dashboard');
         break;
 
     case $path === '/leads':
         $f = LeadQuery::filters($_GET);
-        [$where, $params] = LeadQuery::where($f);
+        [$where, $params] = LeadQuery::where($f, $user);
         $total = (int)Db::val("SELECT COUNT(*) FROM properties p WHERE $where", $params);
         $page = max(1, (int)($_GET['page'] ?? 1));
         $per = 50;
         $rows = Db::all(
-            "SELECT p.*, (SELECT GROUP_CONCAT(DISTINCT s.type) FROM signals s WHERE s.parcel_id = p.parcel_id AND s.active = 1) AS sig_types,
+            "SELECT p.*, xc.name AS exclusive_client, (SELECT GROUP_CONCAT(DISTINCT s.type) FROM signals s WHERE s.parcel_id = p.parcel_id AND s.active = 1) AS sig_types,
                     (SELECT COUNT(*) FROM contacts c JOIN phones ph ON ph.contact_id = c.id WHERE c.parcel_id = p.parcel_id AND COALESCE(ph.is_dnc,0) = 0) AS ok_phones
-             FROM properties p WHERE $where ORDER BY " . LeadQuery::order($f['sort']) . ' LIMIT ' . $per . ' OFFSET ' . (($page - 1) * $per),
+             FROM properties p LEFT JOIN clients xc ON xc.id = p.exclusive_client_id WHERE $where ORDER BY " . LeadQuery::order($f['sort']) . ' LIMIT ' . $per . ' OFFSET ' . (($page - 1) * $per),
             $params
         );
         $munis = array_column(Db::all('SELECT municipality, COUNT(*) n FROM properties WHERE is_excluded = 0 GROUP BY municipality ORDER BY n DESC LIMIT 40'), 'municipality');
-        View::render('leads', compact('f', 'rows', 'total', 'page', 'per', 'munis'), 'Leads');
+        $clients = $isAdmin ? Db::all('SELECT id, name FROM clients WHERE id <> ? ORDER BY name', [$clientId ?? 0]) : [];
+        View::render('leads', compact('f', 'rows', 'total', 'page', 'per', 'munis', 'clients', 'isAdmin'), 'Leads');
         break;
 
     case $path === '/lead':
         $id = (string)($_GET['id'] ?? '');
-        $p = Db::one('SELECT * FROM properties WHERE parcel_id = ?', [$id]);
-        if (!$p) {
+        $p = Db::one('SELECT p.*, xc.name AS exclusive_client FROM properties p LEFT JOIN clients xc ON xc.id = p.exclusive_client_id WHERE p.parcel_id = ?', [$id]);
+        if (!$p || (!$isAdmin && !Pipeline::canWork($p, $user))) {
             http_response_code(404);
             View::render('message', ['message' => 'Lead not found.'], 'Not found');
             break;
@@ -163,11 +172,62 @@ switch (true) {
         }
         unset($c);
         Auth::audit('view_lead', $id);
-        View::render('lead', compact('p', 'signals', 'contacts'), $p['address'] ?: $id);
+        $events = Pipeline::events($id);
+        $canWork = Pipeline::canWork($p, $user);
+        $canEdit = Pipeline::canEdit($p, $user);
+        $clients = $isAdmin ? Db::all('SELECT id, name FROM clients WHERE id <> ? ORDER BY name', [$clientId ?? 0]) : [];
+        View::render('lead', compact('p', 'signals', 'contacts', 'events', 'canWork', 'canEdit', 'clients', 'isAdmin'), $p['address'] ?: $id);
         break;
+
+    case $path === '/lead/update' && $method === 'POST':
+        $id = (string)($_POST['id'] ?? '');
+        $p = Db::one('SELECT parcel_id, exclusive_client_id FROM properties WHERE parcel_id = ?', [$id]);
+        if (!$p || !Pipeline::canEdit($p, $user)) {
+            View::flash('You cannot change this lead.', 'err');
+        } else {
+            try {
+                View::flash(Pipeline::update($id, isset($_POST['status']) ? (string)$_POST['status'] : null, (string)($_POST['note'] ?? ''), $user));
+            } catch (\InvalidArgumentException $e) {
+                View::flash($e->getMessage(), 'err');
+            }
+        }
+        View::redirect('/lead?id=' . urlencode($id));
+
+    case $path === '/leads/status' && $method === 'POST':
+        $ids = array_slice(array_map('strval', (array)($_POST['ids'] ?? [])), 0, 1000);
+        if (!$isAdmin) {
+            $ids = Pipeline::workable($ids, $user);
+        }
+        $n = Pipeline::bulkStatus($ids, (string)($_POST['bulk_status'] ?? ''), $user);
+        View::flash($n . ' lead(s) set to ' . Pipeline::label((string)($_POST['bulk_status'] ?? '')) . '.');
+        View::redirect((string)($_POST['back'] ?? '/leads'));
+
+    case $path === '/deliver' && $method === 'POST':
+        Auth::require(true);
+        $ids = array_slice(array_map('strval', (array)($_POST['ids'] ?? [])), 0, 1000);
+        try {
+            [$ok, $skipped] = Pipeline::deliver($ids, (int)($_POST['client_id'] ?? 0), (string)($_POST['channel'] ?? ''), (string)($_POST['note'] ?? ''), $user);
+            $name = (string)Db::val('SELECT name FROM clients WHERE id = ?', [(int)($_POST['client_id'] ?? 0)]);
+            View::flash("$ok lead(s) delivered to $name (now exclusive)" . ($skipped ? "; $skipped skipped: already exclusive to another client" : '') . '.', $ok ? 'ok' : 'err');
+        } catch (\InvalidArgumentException $e) {
+            View::flash($e->getMessage(), 'err');
+        }
+        View::redirect((string)($_POST['back'] ?? '/leads'));
+
+    case $path === '/lead/release' && $method === 'POST':
+        Auth::require(true);
+        $id = (string)($_POST['id'] ?? '');
+        Pipeline::release($id, (string)($_POST['note'] ?? ''), $user);
+        View::flash('Exclusivity released; the lead is back in the 4Return pool.');
+        View::redirect('/lead?id=' . urlencode($id));
 
     case $path === '/trace' && $method === 'POST':
         $ids = array_slice(array_map('strval', (array)($_POST['ids'] ?? [])), 0, 250);
+        $ids = Pipeline::workable($ids, $user); // never trace a lead delivered exclusively to another client
+        if (!$ids) {
+            View::flash('Nothing to trace: the selected leads are exclusive to a client.', 'err');
+            View::redirect((string)($_POST['back'] ?? '/leads'));
+        }
         try {
             $r = SkipTrace::trace($ids, $clientId, (int)$user['id'], 'manual', !empty($_POST['force']));
             Auth::audit('skiptrace', $r['message'] . ' :: ' . implode(',', array_slice($ids, 0, 20)));
@@ -178,7 +238,7 @@ switch (true) {
         View::redirect((string)($_POST['back'] ?? '/leads'));
 
     case $path === '/push' && $method === 'POST':
-        $ids = array_slice(array_map('strval', (array)($_POST['ids'] ?? [])), 0, 1000);
+        $ids = Pipeline::workable(array_slice(array_map('strval', (array)($_POST['ids'] ?? [])), 0, 1000), $user);
         try {
             $msg = SkipTrace::pushToDealMachine($ids, $clientId);
             Auth::audit('push_dealmachine', $msg);
@@ -203,14 +263,15 @@ switch (true) {
 
     case $path === '/export.csv':
         $f = LeadQuery::filters($_GET);
-        [$where, $params] = LeadQuery::where($f);
-        $rows = Db::all("SELECT p.* FROM properties p WHERE $where ORDER BY " . LeadQuery::order($f['sort']) . ' LIMIT 5000', $params);
+        [$where, $params] = LeadQuery::where($f, $user);
+        $rows = Db::all("SELECT p.*, xc.name AS exclusive_client FROM properties p LEFT JOIN clients xc ON xc.id = p.exclusive_client_id WHERE $where ORDER BY " . LeadQuery::order($f['sort']) . ' LIMIT 5000', $params);
         Auth::audit('export_csv', count($rows) . ' rows ' . json_encode($f));
         header('Content-Type: text/csv; charset=utf-8');
         header('Content-Disposition: attachment; filename="leads-' . date('Ymd-His') . '.csv"');
         $out = fopen('php://output', 'wb');
         fputcsv($out, ['parcel_id', 'score', 'address', 'city', 'zip', 'owner', 'owner_mailing_address', 'owner_mailing_city', 'owner_mailing_state', 'owner_mailing_zip',
-            'absentee', 'est_value', 'equity_pct', 'loan_balance', 'signals', 'score_reasons', 'contact_1', 'phone_1', 'phone_1_type', 'phone_2', 'phone_2_type', 'phone_3', 'phone_3_type', 'email_1', 'email_2'], ',', '"', '\\');
+            'absentee', 'est_value', 'equity_pct', 'loan_balance', 'signals', 'score_reasons', 'contact_1', 'phone_1', 'phone_1_type', 'phone_2', 'phone_2_type', 'phone_3', 'phone_3_type', 'email_1', 'email_2',
+            'status', 'exclusive_client', 'delivered_at', 'delivery_channel'], ',', '"', '\\');
         foreach ($rows as $p) {
             $sig = Db::all('SELECT type, source_ref, item_count, amount FROM signals WHERE parcel_id = ? AND active = 1', [$p['parcel_id']]);
             $sigTxt = implode(' | ', array_map(static fn($s) => $s['type'] === 'blight' ? "blight {$s['item_count']} tickets \${$s['amount']}" : "tax forfeiture {$s['source_ref']}", $sig));
@@ -229,6 +290,7 @@ switch (true) {
             }
             $row[] = $emails[0]['address'] ?? '';
             $row[] = $emails[1]['address'] ?? '';
+            array_push($row, Pipeline::label($p['status']), $p['exclusive_client'] ?? '', $p['delivered_at'] ? when($p['delivered_at'], 'Y-m-d H:i') : '', $p['delivery_channel'] ?? '');
             fputcsv($out, $row, ',', '"', '\\');
         }
         fclose($out);

@@ -1,0 +1,74 @@
+# Loads new Wayne County Treasurer forfeiture lists automatically.
+# Daily: find the newest list on the Treasurer page; if it is new (or its PDF changed), parse it,
+# validate it, and commit data/treasurer/wayne_forfeited_<year>.csv to main. The push deploys to
+# leads.4-return.com and the next scheduled run imports it (resumable, ~20k rows per run).
+# A failed run (page changed, PDF layout changed, validation failed) commits nothing and GitHub
+# emails the repo owner.
+name: Treasurer list
+
+on:
+  schedule:
+    - cron: "17 12 * * *" # daily, ~7-8 a.m. Detroit
+  workflow_dispatch:
+    inputs:
+      year:
+        description: "List year (blank = newest on the page)"
+        required: false
+      pdf_url:
+        description: "PDF URL (only if the page link can't be found; needs year)"
+        required: false
+      dry_run:
+        description: "Parse and validate only, commit nothing"
+        type: boolean
+        default: false
+      force:
+        description: "Re-parse even if the PDF is unchanged"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: treasurer-list
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Install pdftotext
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
+
+      - name: Fetch, parse and validate
+        id: fetch
+        env:
+          YEAR: ${{ inputs.year }}
+          PDF_URL: ${{ inputs.pdf_url }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          args=()
+          [ -n "$YEAR" ] && args+=(--year "$YEAR")
+          [ -n "$PDF_URL" ] && args+=(--pdf-url "$PDF_URL")
+          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          [ "$FORCE" = "true" ] && args+=(--force)
+          python3 tools/fetch_treasurer_list.py "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit new list
+        if: steps.fetch.outputs.changed == 'true'
+        env:
+          YEAR: ${{ steps.fetch.outputs.year }}
+          ROWS: ${{ steps.fetch.outputs.rows }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/treasurer/
+          if git diff --cached --quiet; then echo "No change to commit"; exit 0; fi
+          git commit -m "Treasurer list $YEAR: $ROWS parcels (automatic)"
+          git push origin HEAD:main

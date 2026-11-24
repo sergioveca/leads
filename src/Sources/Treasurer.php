@@ -12,11 +12,15 @@ use Leads\Log;
  * The PDFs are converted to CSV by tools/parse_treasurer_pdf.py (data/treasurer/*.csv, shipped with the app).
  * - Import: every CSV not yet imported (by file name + size) becomes type=tax_forfeiture signals.
  * - Watch: checks the Treasurer page daily and records when a newer list is published.
+ * New lists arrive automatically: .github/workflows/treasurer-list.yml (tools/fetch_treasurer_list.py) commits the CSV.
  */
 final class Treasurer
 {
     public const JOB = 'treasurer';
     public const PAGE = 'https://www.waynecountymi.gov/Government/Elected-Officials/Treasurer/Property-Tax-Information/Forfeited-Property-List-with-Interested-Parties';
+    // The county's Akamai front end answers 403 to browser-like and unknown User-Agents (incl. "Leads/1.0")
+    // but allows tool ones (verified 2026-11-24). Same value as tools/fetch_treasurer_list.py.
+    private const UA = 'curl/8.5.0 Leads/1.0 (+https://leads.4-return.com)';
 
     /** Imports up to $maxRows rows from pending CSVs. Returns rows imported. */
     public static function import(int $maxRows = 20000): int
@@ -106,7 +110,7 @@ final class Treasurer
     /** Daily: look for a newer list on the Treasurer page. Returns a status message. */
     public static function watch(): string
     {
-        $r = Http::request('GET', self::PAGE, ['Accept: text/html'], null, 45);
+        $r = Http::request('GET', self::PAGE, ['Accept: text/html', 'User-Agent: ' . self::UA], null, 45);
         if ($r['status'] !== 200) {
             return 'Treasurer page HTTP ' . $r['status'];
         }
@@ -126,7 +130,7 @@ final class Treasurer
         Db::setSetting('treasurer_latest_published', (string)$latestYear);
         Db::setSetting('treasurer_latest_url', 'https://www.waynecountymi.gov' . $years[$latestYear]);
         if (!in_array($latestYear, $have, true)) {
-            return "NEW LIST PUBLISHED: $latestYear (not yet loaded)";
+            return "NEW LIST PUBLISHED: $latestYear (not loaded yet; the daily GitHub workflow \"Treasurer list\" adds it automatically)";
         }
         return "Latest published list $latestYear is loaded";
     }

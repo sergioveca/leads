@@ -8,24 +8,53 @@ final class LeadQuery
 {
     public static function filters(array $in): array
     {
+        $view = in_array($in['view'] ?? '', ['pool', 'delivered', 'all'], true) ? $in['view'] : 'pool';
+        $status = (string)($in['status'] ?? 'open');
         return [
             'q' => trim((string)($in['q'] ?? '')),
-            'min' => ($in['min'] ?? '') === '' ? 50 : max(0, min(100, (int)$in['min'])),
+            // delivered leads are listed for outcome tracking, so no score floor by default there
+            'min' => ($in['min'] ?? '') === '' ? ($view === 'delivered' ? 0 : 50) : max(0, min(100, (int)$in['min'])),
             'signal' => in_array($in['signal'] ?? '', ['tax_forfeiture', 'blight', 'both'], true) ? $in['signal'] : '',
             'muni' => trim((string)($in['muni'] ?? '')),
             'absentee' => !empty($in['absentee']),
             'traced' => in_array($in['traced'] ?? '', ['yes', 'no', 'phone'], true) ? $in['traced'] : '',
             'zip' => preg_replace('/\D/', '', (string)($in['zip'] ?? '')) ?? '',
             'owner' => in_array($in['owner'] ?? '', ['person', 'entity'], true) ? $in['owner'] : '',
-            'sort' => in_array($in['sort'] ?? '', ['score', 'equity', 'recent', 'address'], true) ? $in['sort'] : 'score',
+            'status' => ($status === 'any' || $status === 'open' || isset(Pipeline::STATUSES[$status])) ? $status : 'open',
+            'view' => $view,
+            'client' => max(0, (int)($in['client'] ?? 0)),
+            'sort' => in_array($in['sort'] ?? '', ['score', 'equity', 'recent', 'address', 'delivered', 'status'], true) ? $in['sort'] : 'score',
         ];
     }
 
-    /** @return array{0:string,1:array} WHERE clause and params */
-    public static function where(array $f): array
+    /**
+     * @param array|null $user signed-in user; client users never see other clients' exclusive leads
+     * @return array{0:string,1:array} WHERE clause and params
+     */
+    public static function where(array $f, ?array $user = null): array
     {
         $w = ['p.is_excluded = 0', 'p.score >= ?'];
         $p = [$f['min']];
+        // pool = not delivered to anyone (4Return's working list); delivered = exclusive to a client
+        if ($f['view'] === 'pool') {
+            $w[] = 'p.exclusive_client_id IS NULL';
+        } elseif ($f['view'] === 'delivered') {
+            $w[] = 'p.exclusive_client_id IS NOT NULL';
+        }
+        if ($f['client'] > 0 && $f['view'] !== 'pool') {
+            $w[] = 'p.exclusive_client_id = ?';
+            $p[] = $f['client'];
+        }
+        if ($user !== null && $user['role'] !== 'admin') {
+            $w[] = '(p.exclusive_client_id IS NULL OR p.exclusive_client_id = ?)';
+            $p[] = (int)$user['client_id'];
+        }
+        if ($f['status'] === 'open') {
+            $w[] = "p.status NOT IN ('dead', 'closed')";
+        } elseif ($f['status'] !== 'any') {
+            $w[] = 'p.status = ?';
+            $p[] = $f['status'];
+        }
         if ($f['q'] !== '') {
             $w[] = '(p.address LIKE ? OR p.owner1 LIKE ? OR p.parcel_id LIKE ?)';
             $like = '%' . $f['q'] . '%';
@@ -71,6 +100,8 @@ final class LeadQuery
             'equity' => 'p.dm_equity_pct IS NULL, p.dm_equity_pct DESC, p.score DESC',
             'recent' => 'p.first_seen_at DESC, p.score DESC',
             'address' => 'p.address',
+            'delivered' => 'p.delivered_at IS NULL, p.delivered_at DESC, p.score DESC',
+            'status' => 'p.status_at IS NULL, p.status_at DESC, p.score DESC',
             default => 'p.score DESC, p.parcel_id',
         };
     }
