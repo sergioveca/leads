@@ -60,12 +60,49 @@ function Try-Step($name, [scriptblock]$block) {
   try { & $block } catch { Note "$name ERROR" ($_.Exception.Message -replace '\s+', ' ') }
 }
 
+# ---------------------------------------------------------------- 0. panel certificate
+function Get-PanelCert {
+  $u = [Uri]$Panel
+  $tcp = New-Object Net.Sockets.TcpClient($u.Host, $u.Port)
+  $script:CertErr = $null
+  $cb = [Net.Security.RemoteCertificateValidationCallback]{ param($s, $c, $ch, $e) $script:CertErr = $e; $true }
+  $ssl = New-Object Net.Security.SslStream($tcp.GetStream(), $false, $cb)
+  $ssl.AuthenticateAsClient($u.Host)
+  $cert = New-Object Security.Cryptography.X509Certificates.X509Certificate2($ssl.RemoteCertificate)
+  $ssl.Dispose(); $tcp.Close()
+  return $cert
+}
+
 # ---------------------------------------------------------------- 1. inventory
 Step "1. Server inventory"
+$srv = $null
 try { $srv = Api 'GET' '/server' }
 catch {
-  Write-Host $_.Exception.Message -ForegroundColor Red
-  Write-Host "Could not log in to the Plesk REST API. Check the user/password. The REST API needs the Plesk ADMIN (or reseller) account." -ForegroundColor Yellow
+  if ($_.Exception.Message -match 'trust relationship|SSL|TLS|certificate') {
+    Write-Host "Windows does not trust the panel's certificate. Details:" -ForegroundColor Yellow
+    $pc = Get-PanelCert
+    Write-Host ("  Subject    : {0}" -f $pc.Subject)
+    Write-Host ("  Names      : {0}" -f $pc.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::DnsName, $false))
+    Write-Host ("  Issuer     : {0}" -f $pc.Issuer)
+    Write-Host ("  Valid      : {0} -> {1}" -f $pc.NotBefore, $pc.NotAfter)
+    Write-Host ("  Problem    : {0}" -f $script:CertErr)
+    Write-Host ("  Thumbprint : {0}" -f $pc.Thumbprint)
+    $ans = Read-Host "Trust THIS certificate (only this thumbprint, only for this run)? Type TRUST to continue"
+    if ($ans -ne 'TRUST') { Write-Host 'Stopped.'; exit 1 }
+    $script:PinThumb = $pc.Thumbprint
+    [Net.ServicePointManager]::ServerCertificateValidationCallback = [Net.Security.RemoteCertificateValidationCallback]{
+      param($s, $c, $ch, $e)
+      if ($e -eq [Net.Security.SslPolicyErrors]::None) { return $true }
+      return ((New-Object Security.Cryptography.X509Certificates.X509Certificate2($c)).Thumbprint -eq $script:PinThumb)
+    }
+    Note 'panel_cert' ("pinned {0} ({1}; {2})" -f $pc.Thumbprint, $pc.Subject, $script:CertErr)
+    try { $srv = Api 'GET' '/server' } catch { Write-Host $_.Exception.Message -ForegroundColor Red }
+  } else {
+    Write-Host $_.Exception.Message -ForegroundColor Red
+  }
+}
+if (-not $srv) {
+  Write-Host "Could not use the Plesk REST API with this login. If the error above says 401/403: the REST API needs the Plesk ADMIN (or reseller) account, not a customer login. Copy the red lines and send them to Claude." -ForegroundColor Yellow
   exit 1
 }
 Note 'plesk_hostname' $srv.hostname
