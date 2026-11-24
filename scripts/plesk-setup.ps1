@@ -16,6 +16,7 @@
 #>
 
 $ErrorActionPreference = 'Stop'
+Write-Host "plesk-setup.ps1  version 4 (certificate pinning)" -ForegroundColor Green
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $Panel      = 'https://az1-wss4.my-hosting-panel.com:8443'
