@@ -35,7 +35,7 @@
     <?= csrf_field() ?>
     <label>Email<input type="email" name="email" required></label>
     <label>Name<input type="text" name="name"></label>
-    <label>Password (10+ chars)<input type="password" name="password" required minlength="10" autocomplete="new-password"></label>
+    <label>Password<input type="password" name="password" required autocomplete="new-password"></label>
     <label>Role<select name="role"><option value="client">Client</option><option value="admin">Admin</option></select></label>
     <label>Client<select name="client_id"><?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>"><?= e($c['name']) ?></option><?php endforeach; ?></select></label>
     <button>Save user</button>

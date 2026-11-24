@@ -57,7 +57,7 @@ final class Migrator
         }
         $email = strtolower(trim((string)Env::get('ADMIN_EMAIL', '')));
         $pass = (string)Env::get('ADMIN_INITIAL_PASSWORD', '');
-        if ($email === '' || strlen($pass) < 10) {
+        if ($email === '' || $pass === '' || str_starts_with($pass, 'FILL')) {
             return;
         }
         $clientId = (int)Db::val("SELECT id FROM clients WHERE name = '4Return'");

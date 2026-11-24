@@ -249,8 +249,8 @@ switch (true) {
         Auth::require(true);
         $email = strtolower(trim((string)($_POST['email'] ?? '')));
         $pass = (string)($_POST['password'] ?? '');
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($pass) < 10) {
-            View::flash('Enter a valid email and a password of at least 10 characters.', 'err');
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL) || $pass === '') {
+            View::flash('Enter a valid email and a password.', 'err');
             View::redirect('/admin');
         }
         $role = ($_POST['role'] ?? '') === 'admin' ? 'admin' : 'client';
