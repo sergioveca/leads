@@ -42,7 +42,7 @@ curl -sS -b "$JAR" -c "$JAR" -o /dev/null --data-urlencode "_csrf=$TOKEN" --data
   --data-urlencode "all[]=absentee" --data-urlencode "all[]=blight" --data-urlencode "min=0" "$BASE/lists/save"
 page /lists "CI absentee blight"
 LID=$(curl -sS -b "$JAR" "$BASE/lists" | grep -o 'list=[0-9]*">Open' | tail -1 | grep -o '[0-9]*')
-HDR=$(curl -sS -b "$JAR" "$BASE/export.csv?all%5B%5D=absentee&min=0&list=$LID" | head -1)
+curl -sS -b "$JAR" -o "$JAR.csv" "$BASE/export.csv?all%5B%5D=absentee&min=0&list=$LID"; HDR=$(head -1 "$JAR.csv")
 if grep -q 'motivators' <<<"$HDR"; then echo "ok   list export"; else echo "FAIL list export: $HDR"; fails=$((fails+1)); fi
 
 # add a note through the form and see it on the timeline
@@ -52,8 +52,8 @@ curl -sS -b "$JAR" -c "$JAR" -o /dev/null --data-urlencode "_csrf=$TOKEN" --data
 page "/lead?id=$PID" "Offered 35k via HTTP test"
 
 # export includes the new columns
-HDR=$(curl -sS -b "$JAR" "$BASE/export.csv?view=delivered&status=any" | head -1)
+curl -sS -b "$JAR" -o "$JAR.csv" "$BASE/export.csv?view=delivered&status=any"; HDR=$(head -1 "$JAR.csv")
 if grep -q 'status,exclusive_client,delivered_at,delivery_channel' <<<"$HDR"; then echo "ok   export.csv columns"; else echo "FAIL export.csv header: $HDR"; fails=$((fails+1)); fi
 
-rm -f "$JAR"
+rm -f "$JAR" "$JAR.csv"
 [ $fails -eq 0 ] && echo "All HTTP checks passed" || { echo "$fails HTTP check(s) FAILED"; exit 1; }
