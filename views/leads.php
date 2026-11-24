@@ -12,6 +12,11 @@
     <label>City<select name="muni"><option value="">All</option>
       <?php foreach ($munis as $m): ?><option <?= $f['muni'] === $m ? 'selected' : '' ?>><?= e($m) ?></option><?php endforeach; ?>
     </select></label>
+    <label>Owner<select name="owner">
+      <option value="">Any</option>
+      <option value="person" <?= $f['owner'] === 'person' ? 'selected' : '' ?>>Individuals only</option>
+      <option value="entity" <?= $f['owner'] === 'entity' ? 'selected' : '' ?>>Companies / trusts</option>
+    </select></label>
     <label>ZIP<input type="text" name="zip" value="<?= e($f['zip']) ?>" style="width:80px"></label>
     <label>Skip trace<select name="traced">
       <option value="">Any</option>

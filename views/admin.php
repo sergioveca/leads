@@ -5,7 +5,7 @@
     <form method="post" action="/admin/settings">
       <?= csrf_field() ?>
       <dl class="kv">
-        <dt>Auto skip trace</dt><dd><label><input type="checkbox" name="auto_trace" value="1" <?= $settings['auto_trace'] === '1' ? 'checked' : '' ?>> Trace new leads automatically</label></dd>
+        <dt>Auto skip trace</dt><dd><label><input type="checkbox" name="auto_trace" value="1" <?= $settings['auto_trace'] === '1' ? 'checked' : '' ?>> Trace new leads automatically</label><div class="mute small">Off = only leads you select on the Leads page are traced.</div></dd>
         <dt>Minimum score</dt><dd><input type="number" name="trace_min_score" value="<?= e($settings['trace_min_score']) ?>" min="0" max="100"></dd>
         <dt>Monthly credit cap</dt><dd><input type="number" name="monthly_credit_cap" value="<?= e($settings['monthly_credit_cap']) ?>" min="0"> <span class="mute small">4Return key; ~2 credits per matched lead</span></dd>
       </dl>

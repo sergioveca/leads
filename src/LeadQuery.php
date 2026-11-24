@@ -16,6 +16,7 @@ final class LeadQuery
             'absentee' => !empty($in['absentee']),
             'traced' => in_array($in['traced'] ?? '', ['yes', 'no', 'phone'], true) ? $in['traced'] : '',
             'zip' => preg_replace('/\D/', '', (string)($in['zip'] ?? '')) ?? '',
+            'owner' => in_array($in['owner'] ?? '', ['person', 'entity'], true) ? $in['owner'] : '',
             'sort' => in_array($in['sort'] ?? '', ['score', 'equity', 'recent', 'address'], true) ? $in['sort'] : 'score',
         ];
     }
@@ -43,6 +44,11 @@ final class LeadQuery
         }
         if ($f['absentee']) {
             $w[] = '(p.is_absentee = 1 OR p.dm_owner_occupied = 0)';
+        }
+        if ($f['owner'] === 'person') {
+            $w[] = 'COALESCE(p.is_entity, 0) = 0';
+        } elseif ($f['owner'] === 'entity') {
+            $w[] = 'p.is_entity = 1';
         }
         if ($f['zip'] !== '') {
             $w[] = 'p.zip LIKE ?';
