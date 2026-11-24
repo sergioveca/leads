@@ -1,0 +1,133 @@
+<?php
+declare(strict_types=1);
+
+namespace Leads\Sources;
+
+use Leads\Db;
+use Leads\Http;
+use Leads\Log;
+
+/**
+ * Wayne County Treasurer "Notice of Forfeited Property Subject to Foreclosure" lists.
+ * The PDFs are converted to CSV by tools/parse_treasurer_pdf.py (data/treasurer/*.csv, shipped with the app).
+ * - Import: every CSV not yet imported (by file name + size) becomes type=tax_forfeiture signals.
+ * - Watch: checks the Treasurer page daily and records when a newer list is published.
+ */
+final class Treasurer
+{
+    public const JOB = 'treasurer';
+    public const PAGE = 'https://www.waynecountymi.gov/Government/Elected-Officials/Treasurer/Property-Tax-Information/Forfeited-Property-List-with-Interested-Parties';
+
+    /** Imports up to $maxRows rows from pending CSVs. Returns rows imported. */
+    public static function import(int $maxRows = 20000): int
+    {
+        $files = glob(LEADS_ROOT . '/data/treasurer/wayne_forfeited_*.csv') ?: [];
+        sort($files);
+        $total = 0;
+        foreach ($files as $file) {
+            $key = 'treasurer_file:' . basename($file);
+            $sig = (string)filesize($file);
+            $state = Db::setting($key);
+            if ($state === 'done:' . $sig) {
+                continue;
+            }
+            $offset = ($state !== null && str_starts_with($state, 'row:')) ? (int)substr($state, 4) : 0;
+            $fh = fopen($file, 'rb');
+            if (!$fh) {
+                continue;
+            }
+            fgetcsv($fh, 0, ',', '"', '\\'); // header
+            $i = 0;
+            $now = gmdate('Y-m-d H:i:s');
+            $signals = [];
+            $props = [];
+            $year = (int)preg_replace('/\D/', '', basename($file));
+            while (($row = fgetcsv($fh, 0, ',', '"', '\\')) !== false) {
+                if ($i++ < $offset) {
+                    continue;
+                }
+                [$pid, $addr, $muni, $parties, $listYear] = array_pad($row, 5, '');
+                $pid = trim($pid);
+                if ($pid === '') {
+                    continue;
+                }
+                $listYear = (int)$listYear ?: $year;
+                $signals[] = [
+                    'parcel_id' => $pid,
+                    'type' => 'tax_forfeiture',
+                    'source' => 'Wayne County Treasurer',
+                    'source_ref' => (string)$listYear,
+                    'amount' => null,
+                    'item_count' => null,
+                    'event_date' => sprintf('%d-03-31', $listYear),
+                    'details' => mb_substr($parties, 0, 2000),
+                    'active' => 1,
+                    'first_seen_at' => $now,
+                    'last_seen_at' => $now,
+                ];
+                $props[] = [
+                    'parcel_id' => $pid,
+                    'municipality' => mb_substr(trim($muni) !== '' ? strtoupper(trim($muni)) : 'WAYNE COUNTY', 0, 80),
+                    'address' => mb_substr(trim($addr), 0, 190),
+                    'first_seen_at' => $now,
+                    'updated_at' => $now,
+                    'needs_score' => 1,
+                ];
+                if (count($signals) >= 500) {
+                    self::flush($signals, $props);
+                    $total += 500;
+                    $signals = $props = [];
+                    Db::setSetting($key, 'row:' . $i);
+                    if ($total >= $maxRows) {
+                        fclose($fh);
+                        return $total;
+                    }
+                }
+            }
+            fclose($fh);
+            $total += count($signals);
+            self::flush($signals, $props);
+            Db::setSetting($key, 'done:' . $sig);
+            Log::info('Treasurer list imported: ' . basename($file));
+        }
+        return $total;
+    }
+
+    private static function flush(array $signals, array $props): void
+    {
+        if (!$signals) {
+            return;
+        }
+        Db::upsert('properties', $props, ['needs_score', 'updated_at']);
+        // fill address/municipality only where we have none yet (Detroit parcel file is authoritative)
+        Db::upsert('signals', $signals, ['details', 'active', 'last_seen_at']);
+    }
+
+    /** Daily: look for a newer list on the Treasurer page. Returns a status message. */
+    public static function watch(): string
+    {
+        $r = Http::request('GET', self::PAGE, ['Accept: text/html'], null, 45);
+        if ($r['status'] !== 200) {
+            return 'Treasurer page HTTP ' . $r['status'];
+        }
+        preg_match_all('~href="([^"]*?(\d{4})_wayne_county_delinquent_tax_liens[^"]*\.pdf)"~i', $r['body'], $m, PREG_SET_ORDER);
+        $years = [];
+        foreach ($m as $x) {
+            if (stripos($x[1], 'archive') === false) {
+                $years[(int)$x[2]] = $x[1];
+            }
+        }
+        if (!$years) {
+            return 'No list links found on Treasurer page';
+        }
+        krsort($years);
+        $latestYear = array_key_first($years);
+        $have = array_map(static fn($f) => (int)preg_replace('/\D/', '', basename($f)), glob(LEADS_ROOT . '/data/treasurer/wayne_forfeited_*.csv') ?: []);
+        Db::setSetting('treasurer_latest_published', (string)$latestYear);
+        Db::setSetting('treasurer_latest_url', 'https://www.waynecountymi.gov' . $years[$latestYear]);
+        if (!in_array($latestYear, $have, true)) {
+            return "NEW LIST PUBLISHED: $latestYear (not yet loaded)";
+        }
+        return "Latest published list $latestYear is loaded";
+    }
+}

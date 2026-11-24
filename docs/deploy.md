@@ -4,27 +4,37 @@
 
 | Item | Value |
 |---|---|
-| Panel | Plesk (customer account, **no API access** — both REST and XML API return permission denied) |
-| Server OS | **Windows / IIS** (ASP.NET, ODBC, Web Deploy present; no SSH) |
-| Subscription system user | `vecanetc` |
-| Site | `leads.4-return.com`, IP `192.250.231.17` |
-| Deploy path | `\leads.4-return.com` |
-| Available tools | Git, Scheduled Tasks, PHP, Databases, SSL/TLS, Laravel (app installer) |
+| Panel | Plesk, customer account (no API access) |
+| Server | Windows / IIS, PHP 8.4 (FastCGI), MariaDB 10.11 on localhost:3306, no SSH |
+| PHP limits | 60 s per web request, 128 MB memory (jobs run in time-boxed slices) |
+| Site folder | `C:\Inetpub\vhosts\vecanet.com\leads.4-return.com` |
+| Document root | `leads.4-return.com\public` |
+| SSL | Let's Encrypt, auto-renew |
 
-## How code reaches the server
+## How code reaches the server (automatic)
 
-1. Push to `main` on GitHub (`sergioveca/leads`).
-2. GitHub webhook (push event) → Plesk Git `web-hook.php`.
-3. Plesk pulls with its repo-specific read-only deploy key (`leads`) and deploys **automatically** to `\leads.4-return.com`.
+Push to `main` → GitHub webhook → Plesk Git pulls (read-only deploy key `leads`) → deployed to `\leads.4-return.com`.
+Database migrations in `migrations/` apply automatically on the next request or scheduled run. No PC, SSH or panel login needed.
 
-No PC, SSH or panel login is needed for normal deploys.
+## One-time setup
 
-Because the server has no SSH/Composer, the app is shipped ready to run (dependencies committed) and applies its own database migrations after a deploy.
+1. **Settings file**: Plesk → Files → `leads.4-return.com` → copy `.env.example` to `.env` and fill in the `FILL` values
+   (DB password, DealMachine key, first admin password, tokens). `.env` is never in Git and is not web-reachable.
+2. **Document root**: Hosting & DNS → Hosting Settings → `leads.4-return.com\public`.
+3. **Scheduled task**: Plesk → Scheduled Tasks → Add Task → *Run a PHP script*
+   - Script path: `leads.4-return.com\bin\cron.php`  ·  Arguments: `240`  ·  PHP 8.4  ·  every 10 minutes.
+   - Fallback if PHP scripts aren't allowed: *Fetch a URL* → `https://leads.4-return.com/cron?token=<CRON_TOKEN>` every 5 minutes.
 
-## One-time items still to do
+## What the scheduled run does
 
-- [ ] Document root → `leads.4-return.com\public` (Hosting & DNS → Hosting settings)
-- [ ] PHP 8.x on the site
-- [ ] Let's Encrypt certificate
-- [ ] Database created; credentials placed in the server-side `.env` (never in Git)
-- [ ] Scheduled Tasks for data imports and skip tracing
+Treasurer CSV import → Treasurer page check (daily) → Detroit blight pass (daily, paged) → Detroit parcel owner sync (14-day refresh)
+→ scoring → automatic DealMachine skip trace (score ≥ setting, within monthly credit cap) → DNC re-check (daily, free).
+
+## Monitoring
+
+`GET /health?token=<HEALTH_TOKEN>` returns versions, counts and job status as JSON. Logs: `storage/logs/`.
+
+## New Treasurer list (yearly, ~December)
+
+Run `python3 tools/parse_treasurer_pdf.py <pdf> <year> data/treasurer/wayne_forfeited_<year>.csv`, commit, push.
+The app flags "NEW LIST PUBLISHED" on the dashboard job list when it detects one.
