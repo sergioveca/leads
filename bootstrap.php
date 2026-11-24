@@ -38,7 +38,9 @@ set_exception_handler(static function (\Throwable $e): void {
         exit(1);
     }
     http_response_code(500);
-    $debug = \Leads\Env::bool('APP_DEBUG', false);
+    $token = (string)\Leads\Env::get('HEALTH_TOKEN', '');
+    $debug = \Leads\Env::bool('APP_DEBUG', false)
+        || ($token !== '' && hash_equals($token, (string)($_GET['token'] ?? '')));
     echo '<h1>Something went wrong</h1>';
     if ($debug) {
         echo '<pre>' . htmlspecialchars((string)$e) . '</pre>';
