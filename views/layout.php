@@ -15,6 +15,7 @@
   <nav>
     <a href="/" class="<?= $here === '/' ? 'on' : '' ?>">Dashboard</a>
     <a href="/leads" class="<?= str_starts_with((string)$here, '/lead') ? 'on' : '' ?>">Leads</a>
+    <a href="/lists" class="<?= str_starts_with((string)$here, '/lists') ? 'on' : '' ?>">Lists</a>
     <?php if ($u['role'] === 'admin'): ?><a href="/admin" class="<?= str_starts_with((string)$here, '/admin') ? 'on' : '' ?>">Admin</a><?php endif; ?>
   </nav>
   <form method="post" action="/logout" class="who"><?= csrf_field() ?><span><?= e($u['email']) ?><?= $u['client_name'] ? ' · ' . e($u['client_name']) : '' ?></span><button class="link">Sign out</button></form>

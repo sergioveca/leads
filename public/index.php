@@ -6,6 +6,8 @@ use Leads\Db;
 use Leads\Env;
 use Leads\Jobs;
 use Leads\LeadQuery;
+use Leads\Lists;
+use Leads\Motivators;
 use Leads\Pipeline;
 use Leads\SkipTrace;
 use Leads\View;
@@ -151,10 +153,63 @@ switch (true) {
              FROM properties p LEFT JOIN clients xc ON xc.id = p.exclusive_client_id WHERE $where ORDER BY " . LeadQuery::order($f['sort']) . ' LIMIT ' . $per . ' OFFSET ' . (($page - 1) * $per),
             $params
         );
+        // motivator chips per row (one signals query for the page)
+        $sigs = [];
+        if ($rows) {
+            $ids = array_column($rows, 'parcel_id');
+            $in = implode(',', array_fill(0, count($ids), '?'));
+            foreach (Db::all("SELECT parcel_id, type, source_ref, event_date FROM signals WHERE active = 1 AND parcel_id IN ($in)", $ids) as $s) {
+                $sigs[$s['parcel_id']][] = $s;
+            }
+        }
+        foreach ($rows as &$r) {
+            $r['motivators'] = Motivators::evaluate($r, $sigs[$r['parcel_id']] ?? []);
+        }
+        unset($r);
         $munis = array_column(Db::all('SELECT municipality, COUNT(*) n FROM properties WHERE is_excluded = 0 GROUP BY municipality ORDER BY n DESC LIMIT 40'), 'municipality');
         $clients = $isAdmin ? Db::all('SELECT id, name FROM clients WHERE id <> ? ORDER BY name', [$clientId ?? 0]) : [];
-        View::render('leads', compact('f', 'rows', 'total', 'page', 'per', 'munis', 'clients', 'isAdmin'), 'Leads');
+        $list = !empty($_GET['list']) ? Db::one('SELECT * FROM saved_lists WHERE id = ?', [(int)$_GET['list']]) : null;
+        View::render('leads', compact('f', 'rows', 'total', 'page', 'per', 'munis', 'clients', 'isAdmin', 'list'), 'Leads');
         break;
+
+    case $path === '/lists':
+        $lists = Lists::all();
+        View::render('lists', compact('lists', 'isAdmin'), 'Lists');
+        break;
+
+    case $path === '/lists/save' && $method === 'POST':
+        $f = LeadQuery::filters($_POST);
+        $name = trim((string)($_POST['name'] ?? ''));
+        $id = (int)($_POST['list_id'] ?? 0);
+        if ($id && !empty($_POST['update'])) {
+            Db::run('UPDATE saved_lists SET query = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?', [Lists::query($f), $id]);
+            Auth::audit('list_updated', "list $id: " . Lists::query($f));
+        } elseif ($name !== '') {
+            Db::run(
+                'INSERT INTO saved_lists (name, description, query, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())',
+                [mb_substr($name, 0, 120), mb_substr(Lists::describe($f), 0, 500), Lists::query($f), $user['id']]
+            );
+            $id = (int)Db::pdo()->lastInsertId();
+            Auth::audit('list_saved', "$name: " . Lists::query($f));
+        } else {
+            View::flash('Give the list a name.', 'err');
+            View::redirect('/leads?' . Lists::query($f));
+        }
+        Lists::recount($id);
+        View::flash('List saved.');
+        View::redirect('/leads?' . Lists::query($f) . '&list=' . $id);
+
+    case $path === '/lists/delete' && $method === 'POST':
+        Auth::require(true);
+        Db::run('DELETE FROM saved_lists WHERE id = ?', [(int)($_POST['id'] ?? 0)]);
+        Auth::audit('list_deleted', (string)(int)($_POST['id'] ?? 0));
+        View::flash('List deleted.');
+        View::redirect('/lists');
+
+    case $path === '/lists/recount' && $method === 'POST':
+        Lists::recount();
+        View::flash('Counts refreshed.');
+        View::redirect('/lists');
 
     case $path === '/lead':
         $id = (string)($_GET['id'] ?? '');
@@ -173,10 +228,11 @@ switch (true) {
         unset($c);
         Auth::audit('view_lead', $id);
         $events = Pipeline::events($id);
+        $motivators = Motivators::evaluate($p, array_filter($signals, static fn($s) => (int)$s['active'] === 1));
         $canWork = Pipeline::canWork($p, $user);
         $canEdit = Pipeline::canEdit($p, $user);
         $clients = $isAdmin ? Db::all('SELECT id, name FROM clients WHERE id <> ? ORDER BY name', [$clientId ?? 0]) : [];
-        View::render('lead', compact('p', 'signals', 'contacts', 'events', 'canWork', 'canEdit', 'clients', 'isAdmin'), $p['address'] ?: $id);
+        View::render('lead', compact('p', 'signals', 'contacts', 'events', 'canWork', 'canEdit', 'clients', 'isAdmin', 'motivators'), $p['address'] ?: $id);
         break;
 
     case $path === '/lead/update' && $method === 'POST':
@@ -265,16 +321,21 @@ switch (true) {
         $f = LeadQuery::filters($_GET);
         [$where, $params] = LeadQuery::where($f, $user);
         $rows = Db::all("SELECT p.*, xc.name AS exclusive_client FROM properties p LEFT JOIN clients xc ON xc.id = p.exclusive_client_id WHERE $where ORDER BY " . LeadQuery::order($f['sort']) . ' LIMIT 5000', $params);
-        Auth::audit('export_csv', count($rows) . ' rows ' . json_encode($f));
+        $list = !empty($_GET['list']) ? Db::one('SELECT id, name FROM saved_lists WHERE id = ?', [(int)$_GET['list']]) : null;
+        if ($list) {
+            Db::run('UPDATE saved_lists SET last_exported_at = UTC_TIMESTAMP(), last_new = 0 WHERE id = ?', [$list['id']]);
+        }
+        Auth::audit('export_csv', count($rows) . ' rows ' . ($list ? "list {$list['id']} {$list['name']} " : '') . json_encode($f));
         header('Content-Type: text/csv; charset=utf-8');
-        header('Content-Disposition: attachment; filename="leads-' . date('Ymd-His') . '.csv"');
+        $slug = $list ? preg_replace('/[^a-z0-9]+/', '-', strtolower($list['name'])) . '-' : '';
+        header('Content-Disposition: attachment; filename="leads-' . $slug . date('Ymd-His') . '.csv"');
         $out = fopen('php://output', 'wb');
         fputcsv($out, ['parcel_id', 'score', 'address', 'city', 'zip', 'owner', 'owner_mailing_address', 'owner_mailing_city', 'owner_mailing_state', 'owner_mailing_zip',
-            'absentee', 'est_value', 'equity_pct', 'loan_balance', 'signals', 'score_reasons', 'contact_1', 'phone_1', 'phone_1_type', 'phone_2', 'phone_2_type', 'phone_3', 'phone_3_type', 'email_1', 'email_2',
+            'absentee', 'est_value', 'equity_pct', 'loan_balance', 'motivators', 'score_reasons', 'contact_1', 'phone_1', 'phone_1_type', 'phone_2', 'phone_2_type', 'phone_3', 'phone_3_type', 'email_1', 'email_2',
             'status', 'exclusive_client', 'delivered_at', 'delivery_channel'], ',', '"', '\\');
         foreach ($rows as $p) {
-            $sig = Db::all('SELECT type, source_ref, item_count, amount FROM signals WHERE parcel_id = ? AND active = 1', [$p['parcel_id']]);
-            $sigTxt = implode(' | ', array_map(static fn($s) => $s['type'] === 'blight' ? "blight {$s['item_count']} tickets \${$s['amount']}" : "tax forfeiture {$s['source_ref']}", $sig));
+            $sig = Db::all('SELECT type, source_ref, event_date FROM signals WHERE parcel_id = ? AND active = 1', [$p['parcel_id']]);
+            $sigTxt = implode(' | ', array_map([Motivators::class, 'label'], Motivators::evaluate($p, $sig)));
             $contact = Db::one("SELECT * FROM contacts WHERE parcel_id = ? ORDER BY contact_type = 'owner' DESC, id LIMIT 1", [$p['parcel_id']]);
             $phones = $emails = [];
             if ($contact) {

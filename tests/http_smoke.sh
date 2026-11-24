@@ -26,6 +26,18 @@ page "/leads?view=delivered&status=any&sort=delivered" "Delivered to clients"
 page "/leads?view=all&status=dead&min=0" "Dead / not interested"
 page "/lead?id=$PID" "Exclusive to"
 page /admin "Scheduled jobs"
+page /lists "Tired landlords"
+page "/leads?m%5Blandlord%5D=all&m%5Bblight%5D=any&m%5Bfire%5D=any&min=0" "Motivators"
+page "/leads?stack=2&min=0&ptype=house" "Save list"
+
+# save a list from the Leads page, then it appears on /lists and exports
+TOKEN=$(curl -sS -b "$JAR" -c "$JAR" "$BASE/leads" | csrf)
+curl -sS -b "$JAR" -c "$JAR" -o /dev/null --data-urlencode "_csrf=$TOKEN" --data-urlencode "name=CI absentee blight" \
+  --data-urlencode "all[]=absentee" --data-urlencode "all[]=blight" --data-urlencode "min=0" "$BASE/lists/save"
+page /lists "CI absentee blight"
+LID=$(curl -sS -b "$JAR" "$BASE/lists" | grep -o 'list=[0-9]*">Open' | tail -1 | grep -o '[0-9]*')
+HDR=$(curl -sS -b "$JAR" "$BASE/export.csv?all%5B%5D=absentee&min=0&list=$LID" | head -1)
+if grep -q 'motivators' <<<"$HDR"; then echo "ok   list export"; else echo "FAIL list export: $HDR"; fails=$((fails+1)); fi
 
 # add a note through the form and see it on the timeline
 TOKEN=$(curl -sS -b "$JAR" -c "$JAR" "$BASE/lead?id=$PID" | csrf)

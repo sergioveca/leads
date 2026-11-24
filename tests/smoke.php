@@ -97,6 +97,114 @@ Pipeline::release($b, 'client passed', $admin);
 check(Db::val('SELECT exclusive_client_id FROM properties WHERE parcel_id = ?', [$b]) === null, 'release returns lead to pool');
 check(Pipeline::events($b)[0]['kind'] === 'released', 'release is on the timeline');
 
+// ---------------------------------------------------------------- motivators and lists
+use Leads\Lists;
+use Leads\Motivators;
+
+$now = gmdate('Y-m-d H:i:s');
+$today = gmdate('Y-m-d');
+$ago = static fn(string $rel): string => gmdate('Y-m-d', strtotime($rel));
+// synthetic Detroit parcels covering every signal type, plus edge cases
+$fixtures = [
+    'T-FIRE.' => [['fire', 'building_fire', $ago('-2 months')]],
+    'T-RENT-BAD.' => [['rental', 'registered', $ago('-1 year')], ['blight', 'open', $ago('-1 month')]],
+    'T-RENT-OK.' => [['rental', 'registered', $ago('-1 year')], ['rental_cert', 'active', $ago('+1 year')]],
+    'T-SHERIFF-NEW.' => [['sheriff_sale', 'sale:1', $ago('-30 days')]],
+    'T-SHERIFF-OLD.' => [['sheriff_sale', 'sale:2', $ago('-400 days')]],
+    'T-INHERIT.' => [['inherited', 'sale:3', $ago('-1 year')], ['vacant', 'registered', $ago('-2 months')], ['demolition', 'pipeline', null]],
+    'T-ESTATE.' => [['blight', 'open', $ago('-3 months')]],
+    'T-PENDING.' => [['tax_forfeiture', '2025', '2025-03-31'], ['tax_forfeiture', (string)((int)date('Y') + 1), ((int)date('Y') + 1) . '-03-31']],
+];
+$owners = [
+    'T-ESTATE.' => ['SMITH, JOHN ESTATE OF', null, 0, 0, '1990-05-01'],
+    'T-INHERIT.' => ['DOE HEIRS', null, 1, 1, null],
+    'T-FIRE.' => ['ACME HOLDINGS LLC', null, 1, 0, '2015-01-01'],
+    'T-RENT-BAD.' => ['JONES, MARY', 'REAL ESTATE SOLUTIONS INC', 1, 0, '2001-01-01'],
+];
+foreach ($fixtures as $pid => $sigs) {
+    [$o1, $o2, $abs, $oos, $sale] = $owners[$pid] ?? ['PERSON, A', null, 0, 0, null];
+    Db::run(
+        "INSERT INTO properties (parcel_id, municipality, address, owner1, owner2, is_absentee, is_out_of_state, is_entity, sale_date, property_class, first_seen_at, updated_at, needs_score)
+         VALUES (?, 'DETROIT', ?, ?, ?, ?, ?, ?, ?, 'RESIDENTIAL', ?, ?, 1)",
+        [$pid, "1 TEST $pid", $o1, $o2, $abs, $oos, \Leads\Sources\DetroitParcels::isEntity($o1) ? 1 : 0, $sale, $now, $now]
+    );
+    foreach ($sigs as [$type, $ref, $date]) {
+        Db::run(
+            "INSERT INTO signals (parcel_id, type, source, source_ref, item_count, event_date, active, first_seen_at, last_seen_at) VALUES (?, ?, 'test', ?, 1, ?, 1, ?, ?)",
+            [$pid, $type, $ref, $date, $now, $now]
+        );
+    }
+}
+while (Scoring::rescore(5000) > 0) {
+}
+$ids = array_keys($fixtures);
+$in = implode(',', array_fill(0, count($ids), '?'));
+$props = [];
+foreach (Db::all("SELECT * FROM properties WHERE parcel_id IN ($in)", $ids) as $r) {
+    $props[$r['parcel_id']] = $r;
+}
+$sigRows = [];
+foreach (Db::all("SELECT parcel_id, type, source_ref, event_date FROM signals WHERE active = 1 AND parcel_id IN ($in)", $ids) as $s) {
+    $sigRows[$s['parcel_id']][] = $s;
+}
+$php = [];
+foreach ($props as $pid => $r) {
+    $php[$pid] = Motivators::evaluate($r, $sigRows[$pid] ?? []);
+}
+$mismatch = [];
+foreach (array_keys(Motivators::all()) as $k) {
+    [$sql, $args] = Motivators::sql($k);
+    $viaSql = array_column(Db::all("SELECT p.parcel_id FROM properties p WHERE p.parcel_id IN ($in) AND ($sql) ORDER BY p.parcel_id", [...$ids, ...$args]), 'parcel_id');
+    $viaPhp = array_keys(array_filter($php, static fn($m) => in_array($k, $m, true)));
+    sort($viaPhp);
+    if ($viaSql !== $viaPhp) {
+        $mismatch[] = "$k sql=[" . implode(',', $viaSql) . '] php=[' . implode(',', $viaPhp) . ']';
+    }
+}
+check(!$mismatch, 'SQL and PHP agree on every motivator' . ($mismatch ? ': ' . implode('; ', $mismatch) : ''));
+$expect = [
+    'T-FIRE.' => ['fire', 'entity'], 'T-RENT-BAD.' => ['rental_noncompliant', 'landlord', 'absentee', 'long_owned', 'blight'],
+    'T-SHERIFF-NEW.' => ['sheriff_sale'], 'T-INHERIT.' => ['inherited', 'vacant', 'demolition', 'estate_owner', 'out_of_state'],
+    'T-ESTATE.' => ['estate_owner', 'long_owned'], 'T-PENDING.' => ['tax', 'tax_pending', 'tax_multi'],
+];
+foreach ($expect as $pid => $want) {
+    $missing = array_diff($want, $php[$pid]);
+    check(!$missing, "$pid has " . implode(', ', $want) . ($missing ? ' (missing ' . implode(', ', $missing) . ')' : ''));
+}
+check(!in_array('sheriff_sale', $php['T-SHERIFF-OLD.'], true), 'sheriff sale older than the redemption period is not "in redemption"');
+check(!in_array('rental_noncompliant', $php['T-RENT-OK.'], true) && in_array('landlord', $php['T-RENT-OK.'], true), 'rental with a certificate is a landlord, not non-compliant');
+check(!in_array('estate_owner', $php['T-RENT-BAD.'], true), '"REAL ESTATE SOLUTIONS INC" is not an estate');
+check(str_contains((string)$props['T-SHERIFF-NEW.']['score_reasons'], 'sheriff sale') && (int)$props['T-SHERIFF-NEW.']['score'] >= 40, 'sheriff sale in redemption scores +40');
+check(str_contains((string)$props['T-INHERIT.']['score_reasons'], 'distress signals stacked'), 'stacked bonus for 3+ situations');
+
+$cnt = static function (array $in) use ($ids): array {
+    $f = LeadQuery::filters($in + ['min' => 0, 'status' => 'any', 'view' => 'all']);
+    [$w, $p] = LeadQuery::where($f);
+    $inq = implode(',', array_fill(0, count($ids), '?'));
+    return array_column(Db::all("SELECT p.parcel_id FROM properties p WHERE $w AND p.parcel_id IN ($inq) ORDER BY p.parcel_id", [...$p, ...$ids]), 'parcel_id');
+};
+check($cnt(['all' => ['landlord'], 'any' => ['blight', 'fire']]) === ['T-RENT-BAD.'], 'must + any of');
+check($cnt(['any' => ['inherited', 'estate_owner'], 'none' => ['vacant']]) === ['T-ESTATE.'], 'any of + exclude');
+check($cnt(['m' => ['fire' => 'all']]) === ['T-FIRE.'], 'picker m[key]=all');
+check($cnt(['stack' => 3]) === ['T-INHERIT.'], 'stack 3+');
+check($cnt(['signal' => 'blight', 'absentee' => '1']) === ['T-RENT-BAD.'], 'old signal/absentee links still work');
+
+$presets = Db::all('SELECT * FROM saved_lists ORDER BY sort_order');
+check(count($presets) === 10, '10 starter lists');
+$bad = [];
+foreach ($presets as $l) {
+    try {
+        Lists::count($l);
+    } catch (\Throwable $e) {
+        $bad[] = $l['name'] . ': ' . $e->getMessage();
+    }
+}
+check(!$bad, 'every starter list runs' . ($bad ? ': ' . implode('; ', $bad) : ''));
+check(Lists::recount() === 10 && (int)Db::val('SELECT COUNT(*) FROM saved_lists WHERE last_count IS NULL') === 0, 'recount fills counts');
+$f = LeadQuery::filters(['all' => ['landlord'], 'any' => ['blight', 'fire'], 'none' => ['entity'], 'stack' => 2, 'min' => 0]);
+check(LeadQuery::filters((static function (string $q) { parse_str($q, $o); return $o; })(Lists::query($f))) == $f, 'saved query round-trips');
+echo 'list sizes: ' . implode(', ', array_map(static fn($l) => $l['name'] . '=' . Db::val('SELECT last_count FROM saved_lists WHERE id = ?', [$l['id']]), $presets)) . PHP_EOL;
+
 echo PHP_EOL . ($fails ? "$fails check(s) FAILED" : 'All checks passed') . PHP_EOL;
 file_put_contents(LEADS_ROOT . '/storage/cache/smoke_parcel.txt', $a);
 exit($fails ? 1 : 0);

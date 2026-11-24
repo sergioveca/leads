@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Leads;
 
 use Leads\Sources\DetroitBlight;
+use Leads\Sources\DetroitSignals;
 use Leads\Sources\DetroitParcels;
 use Leads\Sources\Treasurer;
 
@@ -12,7 +13,9 @@ use Leads\Sources\Treasurer;
  * Every job is resumable (state in job_state), so a run can stop anywhere and continue next time.
  *
  * Order per run: Treasurer CSV import -> Treasurer page watch (daily) -> blight pass (daily, paged)
- * -> Detroit parcel sync (owner/mailing) -> scoring -> auto skip trace -> DNC re-check (daily).
+ * -> other Detroit signal passes (daily, paged, max 60 s each per run: see Sources\DetroitSignals)
+ * -> Detroit parcel sync (owner/mailing) -> scoring -> saved-list counts (hourly) -> auto skip trace
+ * -> DNC re-check (daily).
  */
 final class Jobs
 {
@@ -43,7 +46,10 @@ final class Jobs
         }
         $this->step('treasurer', fn() => 'imported ' . Treasurer::import(20000) . ' rows', 10);
         $this->daily('treasurer_watch', fn() => Treasurer::watch());
-        $this->blight();
+        $this->pagedPass(DetroitBlight::JOB, [DetroitBlight::class, 'page'], [DetroitBlight::class, 'finishPass']);
+        foreach (array_keys(DetroitSignals::sources()) as $key) {
+            $this->pagedPass($key, fn(int $o) => DetroitSignals::page($key, $o), fn(string $t) => DetroitSignals::finishPass($key, $t), DetroitSignals::PAGE_SIZE);
+        }
         $this->loop('detroit_parcels', fn() => DetroitParcels::batch(150), 6);
         // Scores depend on today's date (tax foreclosure date passed? ticket in last 12 months?),
         // so everything is rescored once a month; April 1 turns "foreclosure pending" (+45) into +25.
@@ -52,6 +58,7 @@ final class Jobs
             Db::setSetting('rescore_month', date('Y-m'));
         }
         $this->loop('scoring', fn() => Scoring::rescore(5000), 2);
+        $this->every('list_counts', 3600, fn() => 'counted ' . Lists::recount() . ' lists', 15);
         $this->autoTrace();
         $this->daily('dnc_recheck', fn() => 'checked ' . SkipTrace::recheckDnc(1000) . ' numbers', 20);
         Db::val("SELECT RELEASE_LOCK('leads_jobs')");
@@ -102,8 +109,14 @@ final class Jobs
 
     private function daily(string $job, callable $fn, int $minSeconds = 5): void
     {
+        $this->every($job, 20 * 3600, $fn, $minSeconds);
+    }
+
+    /** Runs $fn if its last success is older than $seconds. */
+    private function every(string $job, int $seconds, callable $fn, int $minSeconds = 5): void
+    {
         $s = $this->state($job);
-        if ($s['last_success_at'] && strtotime($s['last_success_at'] . ' UTC') > time() - 20 * 3600) {
+        if ($s['last_success_at'] && strtotime($s['last_success_at'] . ' UTC') > time() - $seconds) {
             return;
         }
         $this->step($job, $fn, $minSeconds);
@@ -123,10 +136,13 @@ final class Jobs
         Db::run('UPDATE job_state SET rows_last_run = ? WHERE job = ?', [$total, $job]);
     }
 
-    /** Blight: a full paged pass starts once a day and resumes across runs. */
-    private function blight(): void
+    /**
+     * A full paged pass over an ArcGIS source, started once a day and resumed across runs.
+     * $page(int $offset): [rows, finished]; $finish(string $passStartedUtc): rows deactivated.
+     * Each run spends at most $sliceSeconds here so one big pass can't starve the other jobs.
+     */
+    private function pagedPass(string $job, callable $page, callable $finish, int $pageSize = 1000, int $sliceSeconds = 60): void
     {
-        $job = DetroitBlight::JOB;
         $s = $this->state($job);
         $cursor = $s['cursor_value'] ? json_decode((string)$s['cursor_value'], true) : null;
         if (!$cursor) {
@@ -135,20 +151,21 @@ final class Jobs
             }
             $cursor = ['offset' => 0, 'started' => gmdate('Y-m-d H:i:s')];
         }
-        $this->step($job, function () use (&$cursor, $job) {
+        $this->step($job, function () use (&$cursor, $job, $page, $finish, $pageSize, $sliceSeconds) {
             $rows = 0;
             $finished = false;
-            while ($this->left() > 12) {
-                [$n, $finished] = DetroitBlight::page((int)$cursor['offset']);
+            $stop = microtime(true) + $sliceSeconds;
+            while ($this->left() > 12 && microtime(true) < $stop) {
+                [$n, $finished] = $page((int)$cursor['offset']);
                 $rows += $n;
-                $cursor['offset'] += 1000;
+                $cursor['offset'] += $pageSize;
                 $this->save($job, ['cursor_value' => json_encode($cursor)]);
                 if ($finished) {
                     break;
                 }
             }
             if ($finished) {
-                $closed = DetroitBlight::finishPass($cursor['started']);
+                $closed = $finish($cursor['started']);
                 $this->save($job, ['cursor_value' => null]);
                 return "pass complete: $rows parcels this run, $closed closed";
             }

@@ -10,16 +10,37 @@ final class LeadQuery
     {
         $view = in_array($in['view'] ?? '', ['pool', 'delivered', 'all'], true) ? $in['view'] : 'pool';
         $status = (string)($in['status'] ?? 'open');
+        $valid = Motivators::all();
+        $keys = static fn($v): array => array_values(array_unique(array_filter(array_map('strval', (array)($v ?? [])), static fn($k) => isset($valid[$k]))));
+        // the picker on the Leads page sends m[key]=all|any|none
+        foreach ((array)($in['m'] ?? []) as $k => $mode) {
+            if (isset($valid[$k]) && in_array($mode, ['all', 'any', 'none'], true)) {
+                $in[$mode] = array_merge((array)($in[$mode] ?? []), [$k]);
+            }
+        }
+        $all = $keys($in['all'] ?? []);
+        // old single filters (bookmarks, saved links) map onto motivators
+        $all = array_merge($all, match ($in['signal'] ?? '') {
+            'tax_forfeiture' => ['tax'], 'blight' => ['blight'], 'both' => ['tax', 'blight'], default => [],
+        });
+        if (!empty($in['absentee'])) {
+            $all[] = 'absentee';
+        }
+        if (in_array($in['owner'] ?? '', ['person', 'entity'], true)) {
+            $all[] = $in['owner'] === 'person' ? 'individual' : 'entity';
+        }
         return [
             'q' => trim((string)($in['q'] ?? '')),
             // delivered leads are listed for outcome tracking, so no score floor by default there
             'min' => ($in['min'] ?? '') === '' ? ($view === 'delivered' ? 0 : 50) : max(0, min(100, (int)$in['min'])),
-            'signal' => in_array($in['signal'] ?? '', ['tax_forfeiture', 'blight', 'both'], true) ? $in['signal'] : '',
+            'all' => array_values(array_unique($all)),
+            'any' => $keys($in['any'] ?? []),
+            'none' => $keys($in['none'] ?? []),
+            'stack' => max(0, min(6, (int)($in['stack'] ?? 0))),
+            'ptype' => in_array($in['ptype'] ?? '', ['house', 'land'], true) ? $in['ptype'] : '',
             'muni' => trim((string)($in['muni'] ?? '')),
-            'absentee' => !empty($in['absentee']),
             'traced' => in_array($in['traced'] ?? '', ['yes', 'no', 'phone'], true) ? $in['traced'] : '',
             'zip' => preg_replace('/\D/', '', (string)($in['zip'] ?? '')) ?? '',
-            'owner' => in_array($in['owner'] ?? '', ['person', 'entity'], true) ? $in['owner'] : '',
             'status' => ($status === 'any' || $status === 'open' || isset(Pipeline::STATUSES[$status])) ? $status : 'open',
             'view' => $view,
             'client' => max(0, (int)($in['client'] ?? 0)),
@@ -60,24 +81,39 @@ final class LeadQuery
             $like = '%' . $f['q'] . '%';
             array_push($p, $like, $like, $like);
         }
-        if ($f['signal'] === 'both') {
-            $w[] = "EXISTS (SELECT 1 FROM signals s WHERE s.parcel_id = p.parcel_id AND s.active = 1 AND s.type = 'tax_forfeiture')";
-            $w[] = "EXISTS (SELECT 1 FROM signals s WHERE s.parcel_id = p.parcel_id AND s.active = 1 AND s.type = 'blight')";
-        } elseif ($f['signal'] !== '') {
-            $w[] = 'EXISTS (SELECT 1 FROM signals s WHERE s.parcel_id = p.parcel_id AND s.active = 1 AND s.type = ?)';
-            $p[] = $f['signal'];
+        // motivators: must have every one of `all`, at least one of `any`, none of `none`
+        foreach ($f['all'] as $k) {
+            [$sql, $args] = Motivators::sql($k);
+            $w[] = "($sql)";
+            array_push($p, ...$args);
+        }
+        if ($f['any']) {
+            $ors = [];
+            foreach ($f['any'] as $k) {
+                [$sql, $args] = Motivators::sql($k);
+                $ors[] = "($sql)";
+                array_push($p, ...$args);
+            }
+            $w[] = '(' . implode(' OR ', $ors) . ')';
+        }
+        foreach ($f['none'] as $k) {
+            [$sql, $args] = Motivators::sql($k);
+            $w[] = "NOT ($sql)";
+            array_push($p, ...$args);
+        }
+        if ($f['stack'] > 1) {
+            [$sql, $args] = Motivators::stackSql($f['stack']);
+            $w[] = $sql;
+            array_push($p, ...$args);
+        }
+        if ($f['ptype'] === 'house') {
+            $w[] = "p.property_class LIKE '%RESIDENTIAL%' AND p.property_class NOT LIKE '%VACANT%'";
+        } elseif ($f['ptype'] === 'land') {
+            $w[] = "p.property_class LIKE '%VACANT%'";
         }
         if ($f['muni'] !== '') {
             $w[] = 'p.municipality = ?';
             $p[] = strtoupper($f['muni']);
-        }
-        if ($f['absentee']) {
-            $w[] = '(p.is_absentee = 1 OR p.dm_owner_occupied = 0)';
-        }
-        if ($f['owner'] === 'person') {
-            $w[] = 'COALESCE(p.is_entity, 0) = 0';
-        } elseif ($f['owner'] === 'entity') {
-            $w[] = 'p.is_entity = 1';
         }
         if ($f['zip'] !== '') {
             $w[] = 'p.zip LIKE ?';

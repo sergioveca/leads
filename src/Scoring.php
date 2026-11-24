@@ -81,6 +81,56 @@ final class Scoring
             $s += 10;
             $r[] = 'Tax + blight stacked (+10)';
         }
+        $m = Motivators::evaluate($p, $signals);
+        $by = [];
+        foreach ($signals as $x) {
+            $by[$x['type']][] = $x;
+        }
+        $latest = static fn(string $t): string => (string)max(array_column($by[$t] ?? [], 'event_date') ?: ['']);
+        if (in_array('sheriff_sale', $m, true)) {
+            $until = date('M j, Y', strtotime($latest('sheriff_sale') . ' +6 months'));
+            $s += 40;
+            $r[] = "Mortgage foreclosure sheriff sale {$latest('sheriff_sale')}, redemption until about $until (+40)";
+        }
+        if (in_array('demolition', $m, true)) {
+            $s += 25;
+            $r[] = 'On the city demolition list (+25)';
+        }
+        if (in_array('fire', $m, true)) {
+            $s += 20;
+            $r[] = 'Building fire ' . $latest('fire') . ' (+20)';
+            if ($latest('fire') >= date('Y-m-d', strtotime('-12 months'))) {
+                $s += 5;
+                $r[] = 'Fire in last 12 months (+5)';
+            }
+        }
+        if (in_array('inherited', $m, true)) {
+            $s += 20;
+            $r[] = 'Inherited: estate transfer ' . $latest('inherited') . ' (+20)';
+        }
+        if (in_array('estate_owner', $m, true)) {
+            $s += 15;
+            $r[] = 'Owner of record is an estate / heirs (+15)';
+        }
+        if (in_array('vacant', $m, true)) {
+            $s += 15;
+            $r[] = 'Registered vacant (+15)';
+        }
+        if (in_array('rental_noncompliant', $m, true)) {
+            $s += 10;
+            $r[] = 'Rental without certificate of compliance (+10)';
+        } elseif (in_array('landlord', $m, true)) {
+            $s += 5;
+            $r[] = 'Registered rental (landlord) (+5)';
+        }
+        if (in_array('long_owned', $m, true)) {
+            $s += 5;
+            $r[] = 'Owned 20+ years (+5)';
+        }
+        if (Motivators::stackCount($m) >= 3) {
+            $s += 10;
+            $r[] = Motivators::stackCount($m) . ' distress signals stacked (+10)';
+        }
         if ((int)($p['is_absentee'] ?? 0) === 1) {
             $s += 10;
             $r[] = 'Absentee owner (+10)';

@@ -1,6 +1,7 @@
 <?php $back = '/lead?id=' . urlencode($p['parcel_id']); ?>
 <p><a href="/leads">← Leads</a></p>
 <h1><span class="score <?= score_class((int)$p['score']) ?>"><?= (int)$p['score'] ?></span> <?= e($p['address'] ?: $p['parcel_id']) ?> <span class="mute small"><?= e($p['municipality']) ?> <?= e($p['zip'] ?? '') ?></span></h1>
+<p class="motiv"><?php foreach ($motivators as $k): ?><span class="chip m-<?= e(\Leads\Motivators::all()[$k]['group']) ?>" title="<?= e(\Leads\Motivators::all()[$k]['hint']) ?>"><?= e(\Leads\Motivators::label($k)) ?></span><?php endforeach; ?></p>
 <?php if ((int)$p['is_excluded'] === 1): ?><div class="flash err">Excluded from leads: <?= e($p['exclude_reason']) ?></div><?php endif; ?>
 <?php if ($p['exclusive_client_id'] !== null): ?>
 <div class="flash excl">Exclusive to <b><?= e($p['exclusive_client'] ?? 'a client') ?></b> · delivered <?= e(when($p['delivered_at'])) ?> via <?= e(\Leads\Pipeline::CHANNELS[$p['delivery_channel']] ?? $p['delivery_channel'] ?? '—') ?>.
@@ -72,8 +73,8 @@
         <tr><th>Signal</th><th>Details</th><th>Date</th></tr>
         <?php foreach ($signals as $s): ?>
         <tr class="<?= $s['active'] ? '' : 'mute' ?>">
-          <td><span class="chip <?= $s['type'] === 'tax_forfeiture' ? 'tax' : 'blight' ?>"><?= $s['type'] === 'tax_forfeiture' ? 'Tax foreclosure list ' . e($s['source_ref']) : 'Blight tickets' ?></span><?= $s['active'] ? '' : ' (closed)' ?><div class="mute small"><?= e($s['source']) ?></div></td>
-          <td class="small"><?php if ($s['type'] === 'blight'): ?><?= (int)$s['item_count'] ?> open ticket(s), <?= money($s['amount']) ?> unpaid<?php else: ?>Interested parties: <?= e(mb_strimwidth((string)$s['details'], 0, 300, '…')) ?><?php endif; ?></td>
+          <td><span class="chip <?= $s['type'] === 'tax_forfeiture' ? 'tax' : ($s['type'] === 'blight' ? 'blight' : 'm-distress') ?>"><?= e(\Leads\Motivators::signalLabel($s)) ?></span><?= $s['active'] ? '' : ' (closed)' ?><div class="mute small"><?= e($s['source']) ?></div></td>
+          <td class="small"><?= e(\Leads\Motivators::signalDetail($s)) ?></td>
           <td class="nowrap small"><?= e($s['event_date'] ?? '') ?></td>
         </tr>
         <?php endforeach; ?>

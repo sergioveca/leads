@@ -12,7 +12,9 @@ Motivated-seller lead engine for 4Return (wholesaling) and its clients (first cl
 
 ## Data
 - Wayne County Treasurer forfeiture list (PDF → `tools/parse_treasurer_pdf.py` → `data/treasurer/wayne_forfeited_<year>.csv`). 2026 list loaded (37,001 parcels). 2027 list expected early Dec 2026. **Automatic**: GitHub Actions "Treasurer list" (daily) runs `tools/fetch_treasurer_list.py`, validates the parse and commits the CSV to main (see `docs/deploy.md`). The county site (Akamai) 403s browser-like and unknown User-Agents; use a `curl/…` UA.
-- City of Detroit ArcGIS: `blight_tickets` (aggregated per parcel) and `parcel_file_current` (owner, mailing, tax status).
+- City of Detroit ArcGIS: `blight_tickets` (aggregated per parcel) and `parcel_file_current` (owner, mailing, tax status). Also (`src/Sources/DetroitSignals.php`, daily paged passes): building fires, vacant registry, demolitions, rental registrations + compliance certificates, and assessor sales for sheriff's deeds (mortgage foreclosure, in redemption) and estate transfers.
+- Lists (`docs/lists.md`): motivators in `src/Motivators.php` (SQL + PHP, kept in sync by tests). Leads page picker: Must / Any of / Exclude + stacked count. Saved lists (`saved_lists`, 10 starter lists) with hourly counts and "new since last export".
+- Detroit Legal News (mortgage foreclosure + probate notices) forbids robots in its Terms of Use: no scraping. Pending: written permission/feed, or a manual Excel export uploaded into Leads.
 - DealMachine API (`docs/dealmachine.md`): enrichment by APN (Wayne FIPS 26163) with address fallback; ~2 credits/match, misses and repeats free; DNC check free.
 
 ## Decisions so far
@@ -27,5 +29,5 @@ Motivated-seller lead engine for 4Return (wholesaling) and its clients (first cl
 ## Next steps agreed/proposed
 1. ~~Automate ingest of the 2027 Treasurer list~~ (built 2026-11-24; confirm the first real run in December).
 2. ~~Lead status/notes + Home Detroit exclusivity~~ (built 2026-11-24). Next: push delivered leads into Home Detroit's Podio; tune scoring on outcomes.
-3. Pre-foreclosure (sheriff sale notices), then probate/evictions.
+3. ~~More signals + list builder~~ (built 2026-11-24). Pre-sale mortgage foreclosure + probate notices: blocked on Detroit Legal News permission or a sample Excel export to build an upload importer. Evictions/divorce: no bulk source found.
 Housekeeping: rotate the DealMachine API key (was pasted in chat), enable daily DB backup in Plesk.
