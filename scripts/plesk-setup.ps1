@@ -33,8 +33,12 @@ $summary = [ordered]@{}
 function Note($k, $v) { $script:summary[$k] = $v; Write-Host ("  {0}: {1}" -f $k, $v) }
 function Step($t) { Write-Host ""; Write-Host "== $t" -ForegroundColor Cyan }
 
-$cred = Get-Credential -Message "Plesk login for $Panel"
-$pair = "{0}:{1}" -f $cred.UserName, $cred.GetNetworkCredential().Password
+Write-Host "Plesk login for $Panel" -ForegroundColor Cyan
+$PleskUser = Read-Host "Plesk username"
+$PleskPass = Read-Host "Plesk password (hidden)" -AsSecureString
+$cred = New-Object System.Net.NetworkCredential($PleskUser, $PleskPass)
+$pair = "{0}:{1}" -f $cred.UserName, $cred.Password
+$PleskPass = $null
 $auth = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pair))
 $H = @{ Authorization = $auth; Accept = 'application/json' }
 $LeEmail = Read-Host "Email for the Let's Encrypt certificate (expiry notices)"
