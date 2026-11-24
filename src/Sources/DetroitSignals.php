@@ -56,17 +56,21 @@ final class DetroitSignals
             ],
             // Sheriff's deeds after a mortgage foreclosure sale ("10-FORECLOSURE" from the sheriff; the same code is
             // also used for Treasurer/City sales, which are excluded). Michigan gives the owner a redemption period.
+            // (Query shapes matter on this 545k-row layer: date range first, order by ObjectId, no IS NOT NULL;
+            // other shapes take 20+ s and come back as HTTP 400 "Invalid query parameters".)
             'detroit_sheriff_sales' => [
                 'service' => 'assessor_property_sales_view', 'type' => 'sheriff_sale', 'source' => 'Detroit assessor sales (sheriff deeds)', 'creates' => true,
-                'where' => "term_of_sale = '10-FORECLOSURE' AND grantor LIKE '%SHERIFF%' AND parcel_id IS NOT NULL AND sale_date >= '$y2' AND sale_date <= '$today'",
-                'rows' => 'parcel_id,sale_id,sale_date,amt_sale_price,grantor,grantee',
+                'where' => "sale_date >= '$y2' AND sale_date <= '$today' AND grantor LIKE '%SHERIFF%'",
+                'rows' => 'parcel_id,sale_id,sale_date,amt_sale_price,grantor,grantee,term_of_sale',
             ],
-            // Transfers out of / into an estate or by death certificate: recently inherited homes.
+            // Transfers out of an estate or by death certificate: recently inherited homes.
             'detroit_inherited' => [
                 'service' => 'assessor_property_sales_view', 'type' => 'inherited', 'source' => 'Detroit assessor sales (estate transfers)', 'creates' => true,
-                'where' => "(term_of_sale IN ('07-DEATH CERTIFICATE', '08-ESTATE') OR grantor LIKE '%ESTATE%') AND parcel_id IS NOT NULL"
-                    . " AND sale_date >= '$y3' AND sale_date <= '$today'",
-                'rows' => 'parcel_id,sale_id,sale_date,amt_sale_price,grantor,grantee',
+                'where' => "sale_date >= '$y3' AND sale_date <= '$today' AND (grantor LIKE '%ESTATE%' OR term_of_sale IN ('07-DEATH CERTIFICATE', '08-ESTATE'))",
+                'rows' => 'parcel_id,sale_id,sale_date,amt_sale_price,grantor,grantee,term_of_sale',
+                // "BANYAN REAL ESTATE LLC" is not an estate
+                'keep' => static fn(array $a): bool => in_array($a['term_of_sale'] ?? '', ['07-DEATH CERTIFICATE', '08-ESTATE'], true)
+                    || preg_match('/' . \Leads\Motivators::ESTATE_RE . '/', strtoupper(trim((string)($a['grantor'] ?? '')))) === 1,
             ],
         ];
     }
@@ -84,7 +88,7 @@ final class DetroitSignals
             }
             $params += ['outStatistics' => json_encode($stats), 'groupByFieldsForStatistics' => 'parcel_id', 'orderByFields' => 'parcel_id'];
         } else {
-            $params += ['outFields' => $c['rows'], 'orderByFields' => 'sale_id'];
+            $params += ['outFields' => $c['rows'], 'orderByFields' => 'ObjectId'];
         }
         $data = ArcGis::query($url, $params);
         $features = $data['features'] ?? [];
@@ -93,7 +97,7 @@ final class DetroitSignals
         foreach ($features as $f) {
             $a = $f['attributes'] ?? [];
             $pid = trim((string)($a['parcel_id'] ?? ''));
-            if ($pid === '') {
+            if ($pid === '' || (isset($c['keep']) && !$c['keep']($a))) {
                 continue;
             }
             $signals[] = isset($c['stats']) ? [
