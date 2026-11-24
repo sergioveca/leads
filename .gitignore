@@ -1,12 +1,16 @@
-# Secrets & local config
 .env
 .env.*
 !.env.example
-*.key
-# Dependencies / build
 /vendor/
 /node_modules/
-/storage/*.log
-/storage/cache/
-/storage/exports/
+/storage/*.key
+/storage/logs/
+/storage/framework/cache/
+/storage/framework/sessions/
+/storage/framework/views/
+/storage/app/imports/
+/public/storage
+*.log
 .DS_Store
+.idea/
+.vscode/

@@ -1,39 +1,63 @@
 # Leads — leads.4-return.com
 
-Motivated-seller lead engine for **4Return** and its clients. Runs entirely server-side on Plesk (cron jobs), no PC needs to be on.
+Motivated-seller lead engine for **4Return** and its clients. Leads pulls **real county and city records** on a schedule, stacks distress signals per parcel, scores them, skip traces the best ones through **DealMachine**, and serves them in a web dashboard with CSV export and a "Send to DealMachine" action.
 
-## Phase 1 scope — Detroit / Wayne County, MI
-| Signal | Source | Refresh |
-|---|---|---|
-| Tax forfeited / facing foreclosure | Wayne County Treasurer published lists | daily check |
-| Blight tickets (code violations) | City of Detroit ArcGIS `blight_tickets` FeatureServer | daily |
-| Owner / absentee / parcel | City of Detroit ArcGIS `parcel_file_current` | daily |
-| Equity, loans, owner-occupied, contacts | DealMachine API (enrichment) | on demand |
+It runs entirely server-side on our Plesk server (web app + scheduled tasks), so no PC has to stay on.
 
-Phase 2: sheriff-sale / foreclosure notices, Register of Deeds (lis pendens). Phase 3: probate, evictions, divorce.
+> Status: **v1 in progress** — first market: **Detroit / Wayne County, Michigan**.
 
-## Pipeline
+---
+
+## How it works
+
 ```
-ingest (county/city) -> normalize by parcel ID -> score (stacked distress)
-  -> skip trace (cache 90d) -> DealMachine /v1/enrichment/apn (fallback /address)
-     -> [optional Tracerfy] -> [manual-assist link]
-  -> compliance gate (DNC, phone type, opt-outs, 9am–9pm ET)
-  -> dashboard / CSV export / push to DealMachine prospects
+ Real public records (scheduled pulls)
+ ├─ Wayne County Treasurer — tax-forfeited / facing-foreclosure parcels
+ ├─ City of Detroit — blight violation tickets (daily, ArcGIS API)
+ └─ City of Detroit — assessor parcels: owner, mailing address (daily, ArcGIS API)
+                │
+                ▼
+ Normalize by parcel number (Detroit parcel id, e.g. "16029586.")
+                │
+                ▼
+ Score: stack signals → tax forfeiture + blight + absentee owner + equity …
+                │
+                ▼
+ Skip trace leads above threshold → DealMachine API
+   (by APN, fallback by address; misses and repeats cost 0 credits)
+   → owners, phones (type / carrier / DNC / confidence), emails,
+     plus property data: value, equity %, loan balance, owner-occupied, beds/baths
+                │
+                ▼
+ Compliance layer: DNC flags + 31-day recheck, opt-out ledger, 9am–9pm ET call window
+                │
+                ▼
+ Dashboard (4Return + client logins) → filters, lead detail, CSV export,
+ "Send to DealMachine" (adds prospects with Leads tags)
 ```
 
-## DealMachine integration (verified 2026-11-24 against live API)
-- Base `https://api.v2.dealmachine.com/v1`, header `Authorization: Bearer <key>`.
-- `POST /enrichment/apn` — body `{data:[{apn}], location:{type:"county",code:"26163"}, contact_audience:"owners"}`; max 250/request. Detroit parcel numbers (e.g. `16029586.`) match directly.
-- `POST /enrichment/address` — fallback, `full_address` or street/city/state/zip.
-- Billing: ~1 property credit + 1 per returned person. **No-match = 0 credits. Previously billed records = 0 credits (deduplicated).**
-- Returns per person: phones (`number,type,do_not_call,carrier,match_confidence,usage_*`), emails (`address,match_confidence,verification_status`), residence. Property: apn, equity %, loan balance, owner_occupied, assessed value, tax.
-- `POST /phones/dnc` — up to 1,000 numbers: `do_not_call`, `phone_type`, `carrier`.
-- `GET /usage` — credit guard before each batch.
-- Rate limits: 60 req/min, 5,000 req/day; 429 → honor `Retry-After`; 402 → credits exhausted.
+## Data sources (v1)
 
-## Compliance rules enforced in code (not legal advice — counsel review pending)
-- Never export/send to numbers with `do_not_call=true`; re-check DNC every 31 days.
-- Contact window 9:00–21:00 America/Detroit (MCL 750.540e).
-- Global + per-client opt-out ledger; STOP honored immediately.
-- No prerecorded/AI voice or ringless voicemail (MCL 445.111a).
-- Each client uses its own DealMachine/DNC credentials; marketing-use-only client terms.
+| Signal | Source | Access | Refresh |
+|---|---|---|---|
+| Tax forfeiture / foreclosure | Wayne County Treasurer (waynecountymi.gov) | Public files | Weekly; daily in Dec–Mar season |
+| Blight / code violations | City of Detroit `blight_tickets` FeatureServer (services2.arcgis.com) | Public ArcGIS REST | Daily |
+| Owner + mailing address, absentee | City of Detroit `parcel_file_current` FeatureServer | Public ArcGIS REST | Daily |
+| Phones, emails, equity, value | DealMachine API (`api.v2.dealmachine.com/v1`) | API key (paid plan) | On demand, cached |
+
+Planned: sheriff sale / mortgage foreclosure notices, Register of Deeds (lis pendens), probate, 36th District evictions, suburban Wayne County.
+
+See [`docs/dealmachine.md`](docs/dealmachine.md) for the verified API integration notes and [`docs/compliance.md`](docs/compliance.md) for the outreach rules the app enforces.
+
+## Tenancy
+
+- **4Return** (admin) sees everything and manages clients.
+- **Clients** (e.g. Home Detroit) get their own login and lead views. Each client may use **their own DealMachine API key**; otherwise leads are traced on 4Return's key. Keys are stored encrypted, never in the repo.
+
+## Configuration
+
+Copy `.env.example` to `.env` on the server and fill it in. **Never commit `.env` or any API key.**
+
+## Deployment
+
+Target: Plesk subdomain `leads.4-return.com`, Let's Encrypt SSL, deployed from this repo via the Plesk Git extension, scheduled tasks via Plesk cron. Exact stack and steps: [`docs/deploy.md`](docs/deploy.md) (written once the server inventory is confirmed).
