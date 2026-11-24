@@ -16,7 +16,7 @@
 #>
 
 $ErrorActionPreference = 'Stop'
-Write-Host "plesk-setup.ps1  version 4 (certificate pinning)" -ForegroundColor Green
+Write-Host "plesk-setup.ps1  version 5 (compiled certificate pin)" -ForegroundColor Green
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $Panel      = 'https://az1-wss4.my-hosting-panel.com:8443'
@@ -90,12 +90,25 @@ catch {
     Write-Host ("  Thumbprint : {0}" -f $pc.Thumbprint)
     $ans = Read-Host "Trust THIS certificate (only this thumbprint, only for this run)? Type TRUST to continue"
     if ($ans -ne 'TRUST') { Write-Host 'Stopped.'; exit 1 }
-    $script:PinThumb = $pc.Thumbprint
-    [Net.ServicePointManager]::ServerCertificateValidationCallback = [Net.Security.RemoteCertificateValidationCallback]{
-      param($s, $c, $ch, $e)
-      if ($e -eq [Net.Security.SslPolicyErrors]::None) { return $true }
-      return ((New-Object Security.Cryptography.X509Certificates.X509Certificate2($c)).Thumbprint -eq $script:PinThumb)
+    if (-not ('LeadsCertPin' -as [type])) {
+      Add-Type -TypeDefinition @"
+using System.Net;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+public static class LeadsCertPin {
+  public static string Thumb;
+  public static bool Check(object s, X509Certificate c, X509Chain ch, SslPolicyErrors e) {
+    if (e == SslPolicyErrors.None) return true;
+    return c != null && new X509Certificate2(c).Thumbprint == Thumb;
+  }
+  public static void Enable(string thumb) {
+    Thumb = thumb;
+    ServicePointManager.ServerCertificateValidationCallback = new RemoteCertificateValidationCallback(Check);
+  }
+}
+"@
     }
+    [LeadsCertPin]::Enable($pc.Thumbprint)
     Note 'panel_cert' ("pinned {0} ({1}; {2})" -f $pc.Thumbprint, $pc.Subject, $script:CertErr)
     try { $srv = Api 'GET' '/server' } catch { Write-Host $_.Exception.Message -ForegroundColor Red }
   } else {
