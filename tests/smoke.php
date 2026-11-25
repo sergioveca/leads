@@ -263,7 +263,7 @@ check(($r0['est_value'] ?? '') === '85000' && ($r0['equity_pct'] ?? '') === '72'
 check(count(array_diff(\Leads\Exports::SMS_COLUMNS, array_keys($r0))) === 0, 'every SMS column is filled from the row');
 check(\Leads\Exports::fullAddress(['address' => '7296 FENTON ST', 'municipality' => 'DEARBORN HEIGHTS', 'zip' => '48127-1626']) === '7296 Fenton St, Dearborn Heights, MI 48127'
     && \Leads\Exports::fullAddress(['address' => '100 W SEVEN MILE', 'municipality' => 'WAYNE COUNTY', 'zip' => null]) === '100 W Seven Mile, MI', 'SMS address is the full address');
-check(preg_match('/^.+, .+, MI( \d{5})?$/', (string)($r0['address'] ?? '')) === 1, 'SMS row address: ' . ($r0['address'] ?? ''));
+check(preg_match('/^.+, MI( \d{5})?$/', (string)($r0['address'] ?? '')) === 1, 'SMS row address: ' . ($r0['address'] ?? ''));
 
 // ---------------------------------------------------------------- Macomb county list
 // real Macomb BSA ids (from the Dec 2025 notice); tests/sources_live.php syncs their owners from the county layer
