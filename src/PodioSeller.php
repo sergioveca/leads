@@ -19,6 +19,23 @@ final class PodioSeller
         'list_type' => 'List type', 'motivation' => 'Motivation', 'notes' => 'Miscellaneous notes', 'reply' => 'Comment (seller\'s reply)',
     ];
 
+    /** Leads motivator => Home Detroit's "List Type" option, most telling first. */
+    public const LIST_TYPES = [
+        'sheriff_sale' => 'Sheriff Sales', 'estate_owner' => 'Probate', 'inherited' => 'Inheritance',
+        'tax_pending' => 'Tax Default', 'tax_multi' => 'Tax Default', 'tax_big' => 'Tax Default', 'tax' => 'Tax Default',
+        'blight' => 'Code Violations', 'rental_noncompliant' => 'Code Violations', 'demolition' => 'Code Violations',
+        'vacant' => 'Vacant', 'absentee' => 'Absentee Owners', 'out_of_state' => 'Absentee Owners',
+        'high_equity' => 'High Equity', 'free_clear' => 'High Equity',
+    ];
+
+    /** Years since the last sale as Home Detroit's "Years Owned" bracket. */
+    public static function yearsBracket(int $years): string
+    {
+        return match (true) {
+            $years < 5 => 'Less Than 5', $years < 10 => '5 To 10', $years < 15 => '10 To 15', $years < 20 => '15 To 20', default => '20+',
+        };
+    }
+
     public static function sellerApp(): string
     {
         return (string)Env::get('PODIO_SELLER_APP', 'detroitprogresscom/dpgr-crm/seller-leads');
@@ -97,21 +114,33 @@ final class PodioSeller
         $loan = $p['dm_loan_balance'];
         $occupancy = '';
         if ($p['dm_owner_occupied'] !== null && (int)$p['dm_owner_occupied'] === 1) {
-            $occupancy = 'Owner Occupied';
+            $occupancy = 'Yes - Owner Occupied';
         } elseif (isset($sig['vacant'])) {
             $occupancy = 'Vacant';
         } elseif (isset($sig['rental']) || isset($sig['rental_cert'])) {
-            $occupancy = 'Tenant Occupied';
+            $occupancy = 'Yes - Tenant Occupied';
         }
         $years = $p['sale_date'] ? (string)max(0, (int)floor((time() - (int)strtotime((string)$p['sale_date'])) / (365.25 * 86400))) : '';
         $backTaxes = isset($sig['tax_forfeiture']) ? max(array_map(static fn($s) => (float)$s['amount'], $sig['tax_forfeiture'])) : 0;
-        $labels = array_map([Motivators::class, 'label'], array_diff(Motivators::evaluate($p, $sigRows), ['individual']));
+        $keys = array_diff(Motivators::evaluate($p, $sigRows), ['individual']);
+        $labels = array_map([Motivators::class, 'label'], $keys);
+        $listTypes = [];
+        foreach (self::LIST_TYPES as $k => $opt) {
+            if (in_array($k, $keys, true)) {
+                $listTypes[$opt] = true;
+            }
+        }
+        if ($p['dm_equity_pct'] !== null && (float)$p['dm_equity_pct'] < 0) {
+            $listTypes['Negative Equity'] = true;
+        }
+        $leadsList = (string)(Db::val('SELECT list_name FROM sms_export_log WHERE phone = ? ORDER BY exported_at DESC LIMIT 1', [$phone10]) ?? '');
         $base = 'https://leads.4-return.com';
         $notes = array_filter([
             '4Return Leads score ' . (int)$p['score'] . ': ' . $base . '/lead?id=' . rawurlencode((string)$p['parcel_id']),
             $p['dm_estimated_value'] !== null ? 'Est. value ' . $money($p['dm_estimated_value']) . ($p['dm_equity_pct'] !== null ? ' · equity ' . (int)$p['dm_equity_pct'] . '%' : '') . ($loan !== null ? ' · loan ' . $money($loan) : '') . ' (DealMachine)' : null,
             $backTaxes > 0 ? 'Back taxes owed: ' . $money($backTaxes) : null,
-            $p['sale_date'] ? 'Last sale: ' . $p['sale_date'] . ($p['sale_price'] ? ' for ' . $money($p['sale_price']) : '') : null,
+            $leadsList !== '' ? 'Leads list: ' . $leadsList : null,
+            $p['sale_date'] ? 'Last sale: ' . $p['sale_date'] . ($years !== '' ? " ($years years ago)" : '') . ($p['sale_price'] ? ' for ' . $money($p['sale_price']) : '') : null,
             $p['owner1'] ? 'Owner of record: ' . $p['owner1'] . ($p['mail_address'] ? ' · mailing ' . trim($p['mail_address'] . ', ' . $p['mail_city'] . ' ' . $p['mail_state'] . ' ' . $p['mail_zip']) : '') : null,
             $p['year_built'] || $p['dm_year_built'] ? 'Year built: ' . ($p['dm_year_built'] ?? $p['year_built']) : null,
         ]);
@@ -122,14 +151,14 @@ final class PodioSeller
             'baths' => $p['dm_baths'] !== null ? (string)(0 + $p['dm_baths']) : '',
             'sqft' => (string)($p['dm_sqft'] ?? $p['building_sqft'] ?? ''),
             'property_type' => stripos((string)$p['property_class'], 'RESID') !== false ? 'Single Family' : '',
-            'years_owned' => $years,
+            'years_owned' => $years !== '' ? self::yearsBracket((int)$years) : '',
             'occupancy' => $occupancy,
             'paid_off' => $loan === null ? '' : ((int)$loan === 0 ? 'Yes' : 'No'),
             'mortgage' => $loan !== null && (int)$loan > 0 ? (string)$loan : '',
             'value' => (string)($p['dm_estimated_value'] ?? ''),
             'county' => ucfirst(strtolower((string)$p['county'])),
             'apn' => (string)($p['apn'] ?: $p['parcel_id']),
-            'list_type' => (string)(Db::val('SELECT list_name FROM sms_export_log WHERE phone = ? ORDER BY exported_at DESC LIMIT 1', [$phone10]) ?? ''),
+            'list_type' => implode(', ', array_keys($listTypes)),
             'motivation' => trim(implode(', ', $labels) . "\n" . (string)$p['score_reasons']),
             'notes' => implode("\n", $notes),
         ];
@@ -160,17 +189,13 @@ final class PodioSeller
             'SqFt' => $d['sqft'],
             'Property Type' => $d['property_type'] === 'Single Family' ? ['Single Family', 'Single Family Home', 'SFH', 'House', 'Residential'] : $d['property_type'],
             'Years Owned' => $d['years_owned'],
-            'Is the property currently owner occupied, tenant occupied or vacant?' => match ($d['occupancy']) {
-                'Owner Occupied' => ['Owner Occupied', 'Owner occupied', 'Owner'],
-                'Tenant Occupied' => ['Tenant Occupied', 'Tenant occupied', 'Tenant'],
-                default => $d['occupancy'],
-            },
+            'Is the property currently owner occupied, tenant occupied or vacant?' => $d['occupancy'],
             'Property Paid off?' => $yes($d['paid_off']),
             'Mortgage Amount' => $d['mortgage'],
             'Property Value (TotalView)' => $d['value'],
             'County' => $d['county'],
             '++APN' => $d['apn'],
-            'List Type' => $d['list_type'],
+            'List Type' => ['_all' => array_values(array_filter(array_map('trim', explode(',', $d['list_type']))))],
             'Motivation' => $d['motivation'],
             'Miscellaneous Notes' => $d['notes'],
         ];

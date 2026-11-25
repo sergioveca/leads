@@ -311,6 +311,13 @@ check(count($dr['choices']) === 2 && $dd['parcel_id'] === 'T-ESTATE.' && $dd['na
 check($dd['reply'] === 'Reply: "Yes I would!"' && $dd['lead_came_in'] === date('Y-m-d H:i', strtotime('2026-11-25 15:30:00 UTC')), 'Podio draft: reply comment and date lead came in (Miami time)');
 check($dd['value'] === '85000' && $dd['paid_off'] === 'Yes' && $dd['beds'] === '3' && str_contains($dd['notes'], '/lead?id=T-ESTATE.') && $dd['county'] === 'Wayne', 'Podio draft: DealMachine value, paid off, beds, Leads link, county');
 check(PodioSeller::sellerValues($dd, 555)['Seller Contact'] === 555 && PodioSeller::sellerValues($dd, 555)['Property Paid off?'][0] === 'Yes' && PodioSeller::contactValues($dd)['Contact Type'] === 'Seller', 'Podio values for both apps');
+$multi = ['id' => 11, 'external_id' => 'list-type', 'type' => 'category', 'label' => 'List Type', 'required' => false, 'multiple' => true, 'apps' => [],
+    'options' => [['id' => 31, 'text' => 'Probate'], ['id' => 32, 'text' => 'Tax Default'], ['id' => 33, 'text' => 'Code Violations']]];
+$lt = Podio::fields(['name' => 'x', 'fields' => [$multi]], ['List Type' => ['_all' => ['Tax Default', 'Code Violations', 'Sheriff Sales']]])[0];
+$lt1 = Podio::fields(['name' => 'x', 'fields' => [['multiple' => false] + $multi]], ['List Type' => ['_all' => ['Tax Default', 'Code Violations']]])[0];
+check(($lt['list-type'] ?? null) === [32, 33] && ($lt1['list-type'] ?? null) === [32], 'Podio List Type: every matching option (multi-select) or the first (single)');
+check(PodioSeller::yearsBracket(3) === 'Less Than 5' && PodioSeller::yearsBracket(14) === '10 To 15' && PodioSeller::yearsBracket(25) === '20+', 'Years Owned brackets');
+check(str_contains($dd['list_type'], 'Tax Default') || $dd['list_type'] === '' , 'draft List Type uses Home Detroit options: ' . $dd['list_type']);
 check(PodioSeller::sameStreet('15517 Lauder St, Detroit, MI 48227', '15517 LAUDER') && !PodioSeller::sameStreet('15517 Lauder St', '15519 LAUDER'), 'Slack address matches the county address');
 try {
     PodioSeller::create($dd, $admin);

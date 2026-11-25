@@ -134,7 +134,7 @@ final class Podio
         $out = [];
         $warn = [];
         foreach ($values as $label => $v) {
-            if ($v === null || $v === '' || $v === []) {
+            if ($v === null || $v === '' || $v === [] || $v === ['_all' => []]) {
                 continue;
             }
             $f = self::field($app, (string)$label);
@@ -144,7 +144,7 @@ final class Podio
             }
             $val = self::convert($f, $v, $lookup);
             if ($val === null) {
-                $warn[] = "\"$label\": could not use " . (is_array($v) ? implode(' / ', array_map('strval', $v)) : (string)$v) . " ({$f['type']} field)";
+                $warn[] = "\"$label\": could not use " . (is_array($v) ? implode(' / ', array_map(static fn($x) => is_array($x) ? implode(', ', $x) : (string)$x, $v)) : (string)$v) . " ({$f['type']} field)";
                 continue;
             }
             $out[$f['external_id']] = $val;
@@ -154,6 +154,22 @@ final class Podio
 
     private static function convert(array $f, mixed $v, ?callable $lookup): mixed
     {
+        // ['_all' => [...]]: every matching option of a multi-select category (the first match if single-select)
+        if (is_array($v) && isset($v['_all'])) {
+            if ($f['type'] !== 'category' || !$v['_all']) {
+                return null;
+            }
+            $ids = [];
+            foreach ($v['_all'] as $want) {
+                foreach ($f['options'] as $o) {
+                    if (self::norm($o['text']) === self::norm((string)$want)) {
+                        $ids[$o['id']] = $o['id'];
+                    }
+                }
+            }
+            $ids = array_values($ids);
+            return $ids ? ($f['multiple'] ? $ids : [$ids[0]]) : null;
+        }
         $first = is_array($v) ? reset($v) : $v;
         switch ($f['type']) {
             case 'text':
