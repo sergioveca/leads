@@ -1,0 +1,9 @@
+{
+  "county": "macomb",
+  "year": 2026,
+  "url": "https://macombgov.org/sites/default/files/files/2025-12/Macomb%20Tax%20Sale%202025%20digital.pdf",
+  "sha256": "afecbe8edbb14dfb1a25764f328100e9d5c8c02b3f360a1460e733368d83ad7d",
+  "bytes": 501300,
+  "parcels": 2700,
+  "fetched_at": "2026-11-25T01:24:16Z"
+}
