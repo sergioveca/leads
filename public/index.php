@@ -146,7 +146,7 @@ switch (true) {
         [$where, $params] = LeadQuery::where($f, $user);
         $total = (int)Db::val("SELECT COUNT(*) FROM properties p WHERE $where", $params);
         $page = max(1, (int)($_GET['page'] ?? 1));
-        $per = 50;
+        $per = in_array((int)($_GET['per'] ?? 50), [50, 100, 250], true) ? (int)$_GET['per'] : 50;
         $rows = Db::all(
             "SELECT p.*, xc.name AS exclusive_client, (SELECT GROUP_CONCAT(DISTINCT s.type) FROM signals s WHERE s.parcel_id = p.parcel_id AND s.active = 1) AS sig_types,
                     (SELECT COUNT(*) FROM contacts c JOIN phones ph ON ph.contact_id = c.id WHERE c.parcel_id = p.parcel_id AND COALESCE(ph.is_dnc,0) = 0) AS ok_phones
@@ -250,7 +250,7 @@ switch (true) {
         View::redirect('/lead?id=' . urlencode($id));
 
     case $path === '/leads/status' && $method === 'POST':
-        $ids = array_slice(array_map('strval', (array)($_POST['ids'] ?? [])), 0, 1000);
+        $ids = LeadQuery::bulkIds($_POST, $user, 5000);
         if (!$isAdmin) {
             $ids = Pipeline::workable($ids, $user);
         }
@@ -260,7 +260,7 @@ switch (true) {
 
     case $path === '/deliver' && $method === 'POST':
         Auth::require(true);
-        $ids = array_slice(array_map('strval', (array)($_POST['ids'] ?? [])), 0, 1000);
+        $ids = LeadQuery::bulkIds($_POST, $user, 5000);
         try {
             [$ok, $skipped] = Pipeline::deliver($ids, (int)($_POST['client_id'] ?? 0), (string)($_POST['channel'] ?? ''), (string)($_POST['note'] ?? ''), $user);
             $name = (string)Db::val('SELECT name FROM clients WHERE id = ?', [(int)($_POST['client_id'] ?? 0)]);
@@ -278,10 +278,10 @@ switch (true) {
         View::redirect('/lead?id=' . urlencode($id));
 
     case $path === '/trace' && $method === 'POST':
-        $ids = array_slice(array_map('strval', (array)($_POST['ids'] ?? [])), 0, 250);
+        $ids = LeadQuery::bulkIds($_POST, $user, 250, 'p.traced_at IS NULL OR p.traced_at < UTC_TIMESTAMP() - INTERVAL 90 DAY');
         $ids = Pipeline::workable($ids, $user); // never trace a lead delivered exclusively to another client
         if (!$ids) {
-            View::flash('Nothing to trace: the selected leads are exclusive to a client.', 'err');
+            View::flash('Nothing to trace: the selected leads were traced in the last 90 days or are exclusive to a client.', 'err');
             View::redirect((string)($_POST['back'] ?? '/leads'));
         }
         try {
@@ -293,8 +293,38 @@ switch (true) {
         }
         View::redirect((string)($_POST['back'] ?? '/leads'));
 
+    case $path === '/trace.json' && $method === 'POST':
+        // "Skip trace all matching": the Leads page calls this repeatedly; each call traces the next 250
+        // untraced matching leads. dry=1 only returns the estimate shown in the confirmation.
+        header('Content-Type: application/json');
+        $untraced = 'p.traced_at IS NULL OR p.traced_at < UTC_TIMESTAMP() - INTERVAL 90 DAY';
+        $scope = ['scope' => 'all', 'query' => (string)($_POST['query'] ?? '')];
+        [, $creditClient] = (static function () use ($clientId) {
+            try {
+                return SkipTrace::keyFor($clientId);
+            } catch (\Throwable) {
+                return [null, null];
+            }
+        })();
+        $left = max(0, SkipTrace::monthlyCap($creditClient) - SkipTrace::creditsUsedThisMonth($creditClient));
+        $remaining = count(Pipeline::workable(LeadQuery::bulkIds($scope, $user, 20000, $untraced), $user));
+        if (!empty($_POST['dry'])) {
+            echo json_encode(['remaining' => $remaining, 'credits_left' => $left, 'max_credits' => $remaining * 2]);
+            exit;
+        }
+        $ids = Pipeline::workable(LeadQuery::bulkIds($scope, $user, 250, $untraced), $user);
+        try {
+            $r = $ids ? SkipTrace::trace($ids, $clientId, (int)$user['id'], 'manual') : ['submitted' => 0, 'matched' => 0, 'credits' => 0, 'message' => 'Nothing left to trace'];
+            Auth::audit('skiptrace', 'trace all: ' . $r['message']);
+            echo json_encode($r + ['remaining' => max(0, $remaining - $r['submitted']), 'credits_left' => max(0, $left - $r['credits'])]);
+        } catch (\Throwable $e) {
+            http_response_code(502);
+            echo json_encode(['error' => $e->getMessage(), 'remaining' => $remaining]);
+        }
+        exit;
+
     case $path === '/push' && $method === 'POST':
-        $ids = Pipeline::workable(array_slice(array_map('strval', (array)($_POST['ids'] ?? [])), 0, 1000), $user);
+        $ids = Pipeline::workable(LeadQuery::bulkIds($_POST, $user, 1000, 'p.dm_property_id IS NOT NULL'), $user);
         try {
             $msg = SkipTrace::pushToDealMachine($ids, $clientId);
             Auth::audit('push_dealmachine', $msg);

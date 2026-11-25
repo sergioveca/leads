@@ -81,6 +81,9 @@ final class SkipTrace
         foreach (Db::all("SELECT parcel_id, address, municipality, zip FROM properties WHERE parcel_id IN ($in)", $parcelIds) as $p) {
             $props[$p['parcel_id']] = $p;
         }
+        if (!$props) {
+            return ['submitted' => 0, 'matched' => 0, 'credits' => 0, 'message' => 'Nothing to trace (unknown parcels)'];
+        }
 
         $matched = 0;
         $credits = 0;
@@ -128,6 +131,15 @@ final class SkipTrace
             }
         }
         $now = gmdate('Y-m-d H:i:s');
+        // anything submitted that came back neither matched nor as a miss (absent from the response) also counts
+        // as tried, so "trace all" never resubmits the same parcel in a loop
+        $matchedIds = array_column(Db::all(
+            'SELECT parcel_id FROM properties WHERE parcel_id IN (' . implode(',', array_fill(0, count($props), '?')) . ') AND dm_matched = 1 AND traced_at >= ?',
+            [...array_keys($props), gmdate('Y-m-d H:i:s', time() - 3600)]
+        ), 'parcel_id');
+        foreach (array_diff(array_keys($props), $matchedIds, array_keys($stillMissing)) as $pid) {
+            $stillMissing[$pid] = true;
+        }
         foreach (array_keys($stillMissing) as $pid) {
             Db::run('UPDATE properties SET traced_at = ?, traced_by_client_id = ?, dm_matched = 0 WHERE parcel_id = ?', [$now, $creditClient, $pid]);
         }

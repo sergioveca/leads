@@ -29,14 +29,16 @@ final class LeadQuery
         if (in_array($in['owner'] ?? '', ['person', 'entity'], true)) {
             $all[] = $in['owner'] === 'person' ? 'individual' : 'entity';
         }
+        $any = $keys($in['any'] ?? []);
+        $none = $keys($in['none'] ?? []);
+        $stack = max(0, min(6, (int)($in['stack'] ?? 0)));
         return [
             'q' => trim((string)($in['q'] ?? '')),
-            // delivered leads are listed for outcome tracking, so no score floor by default there
-            'min' => ($in['min'] ?? '') === '' ? ($view === 'delivered' ? 0 : 50) : max(0, min(100, (int)$in['min'])),
+            'min' => ($in['min'] ?? '') === '' ? self::defaultMin($view, (bool)($all || $any || $none || $stack > 1)) : max(0, min(100, (int)$in['min'])),
             'all' => array_values(array_unique($all)),
-            'any' => $keys($in['any'] ?? []),
-            'none' => $keys($in['none'] ?? []),
-            'stack' => max(0, min(6, (int)($in['stack'] ?? 0))),
+            'any' => $any,
+            'none' => $none,
+            'stack' => $stack,
             'ptype' => in_array($in['ptype'] ?? '', ['house', 'land'], true) ? $in['ptype'] : '',
             'muni' => trim((string)($in['muni'] ?? '')),
             'traced' => in_array($in['traced'] ?? '', ['yes', 'no', 'phone'], true) ? $in['traced'] : '',
@@ -46,6 +48,36 @@ final class LeadQuery
             'client' => max(0, (int)($in['client'] ?? 0)),
             'sort' => in_array($in['sort'] ?? '', ['score', 'equity', 'recent', 'address', 'delivered', 'status'], true) ? $in['sort'] : 'score',
         ];
+    }
+
+    /**
+     * Score floor when none is given: 50 for the plain lead list; 0 when motivators pick the leads (they decide,
+     * not the score) and for delivered leads (listed for outcome tracking).
+     */
+    public static function defaultMin(string $view, bool $hasMotivators): int
+    {
+        return ($view === 'delivered' || $hasMotivators) ? 0 : 50;
+    }
+
+    /**
+     * Parcel ids for a bulk action: the ticked ones, or every lead matching the saved filter query when the
+     * user chose "select all matching". Leads exclusive to another client are never included.
+     *
+     * @return string[]
+     */
+    public static function bulkIds(array $post, array $user, int $limit, string $extraWhere = ''): array
+    {
+        if (($post['scope'] ?? '') === 'all') {
+            parse_str((string)($post['query'] ?? ''), $in);
+            $f = self::filters($in);
+            [$where, $params] = self::where($f, $user);
+            $own = $user['role'] === 'admin' ? '' : ' AND (p.exclusive_client_id IS NULL OR p.exclusive_client_id = ' . (int)$user['client_id'] . ')';
+            return array_column(Db::all(
+                "SELECT p.parcel_id FROM properties p WHERE $where$own" . ($extraWhere !== '' ? " AND ($extraWhere)" : '') . ' ORDER BY ' . self::order($f['sort']) . ' LIMIT ' . $limit,
+                $params
+            ), 'parcel_id');
+        }
+        return array_slice(array_values(array_unique(array_map('strval', (array)($post['ids'] ?? [])))), 0, $limit);
     }
 
     /**

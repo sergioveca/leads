@@ -9,6 +9,7 @@ foreach (['all', 'any', 'none'] as $k) {
     }
 }
 $qsNow = Lists::query($f);
+$mc = Lists::motivatorCounts();
 $hidden = static function (string $query): string {
     parse_str($query, $arr);
     $out = '';
@@ -43,13 +44,14 @@ $hidden = static function (string $query): string {
             <option value="any" <?= $cur === 'any' ? 'selected' : '' ?>>Any of</option>
             <option value="none" <?= $cur === 'none' ? 'selected' : '' ?>>Exclude</option>
           </select>
-          <span><?= e($m['label']) ?></span>
+          <span><?= e($m['label']) ?><?php if (isset($mc['counts'][$key])): $n = (int)$mc['counts'][$key]; ?> <span class="mcount <?= $n ? '' : 'zero' ?>" title="<?= $n ? 'Open leads in the working pool with this motivator (any score)' : ($g === 'money' ? 'None yet: equity comes from DealMachine, so skip trace leads first' : 'No leads have this right now') ?>"><?= number_format($n) ?></span><?php endif; ?></span>
         </label>
         <?php endforeach; ?>
       </fieldset>
       <?php endforeach; ?>
     </div>
-    <p class="mute small" style="margin:4px 0 10px"><b>Must</b> = has all of these · <b>Any of</b> = has at least one · <b>Exclude</b> = has none. Hover a motivator for what it means.</p>
+    <p class="mute small" style="margin:4px 0 10px"><b>Must</b> = has all of these · <b>Any of</b> = has at least one · <b>Exclude</b> = has none. Hover a motivator for what it means.
+      <?php if ($mc['at']): ?>Numbers = open leads with that motivator (counted <?= e(when($mc['at'], 'g:i a T')) ?>).<?php endif; ?></p>
     <div class="filters">
       <label>Stacked<select name="stack">
         <option value="">Any</option>
@@ -60,7 +62,8 @@ $hidden = static function (string $query): string {
         <option value="house" <?= $f['ptype'] === 'house' ? 'selected' : '' ?>>Houses (residential, built)</option>
         <option value="land" <?= $f['ptype'] === 'land' ? 'selected' : '' ?>>Vacant land</option>
       </select></label>
-      <label>Min score<input type="number" name="min" value="<?= e($f['min']) ?>" min="0" max="100" style="width:80px"></label>
+      <?php $minSet = isset($_GET['min']) && $_GET['min'] !== ''; ?>
+      <label title="Leave empty for automatic: 0 when you pick motivators, 50 otherwise">Min score<input type="number" name="min" value="<?= $minSet ? e($f['min']) : '' ?>" placeholder="auto (<?= (int)$f['min'] ?>)" min="0" max="100" style="width:92px"></label>
       <label>Status<select name="status">
         <option value="open" <?= $f['status'] === 'open' ? 'selected' : '' ?>>Open (not dead/closed)</option>
         <option value="any" <?= $f['status'] === 'any' ? 'selected' : '' ?>>Any</option>
@@ -106,14 +109,24 @@ $hidden = static function (string $query): string {
 </div>
 
 
-<form method="post" class="card">
+<form method="post" class="card" id="bulk" data-total="<?= (int)$total ?>">
   <?= csrf_field() ?>
   <input type="hidden" name="back" value="<?= e($_SERVER['REQUEST_URI'] ?? '/leads') ?>">
-  <div class="actions" style="margin-bottom:10px">
-    <button formaction="/trace">Skip trace selected</button>
-    <button formaction="/push" class="secondary">Send selected to DealMachine</button>
-    <span class="mute small">Up to 250 per click. Already-traced parcels (last 90 days) and leads exclusive to a client are skipped and cost nothing.</span>
+  <input type="hidden" name="scope" id="scope" value="selected">
+  <input type="hidden" name="query" value="<?= e($qsNow) ?>">
+  <div class="resultbar">
+    <b><?= number_format($total) ?></b> lead<?= $total === 1 ? '' : 's' ?> match ·
+    <span class="mute">showing <?= $total ? number_format(($page - 1) * $per + 1) . '–' . number_format(min($total, $page * $per)) : '0' ?></span>
+    <span class="mute">· per page</span>
+    <?php foreach ([50, 100, 250] as $n): ?><a class="<?= $per === $n ? 'on' : '' ?>" href="<?= e(qs(['per' => $n === 50 ? null : $n, 'page' => null])) ?>"><?= $n ?></a><?php endforeach; ?>
+    <span id="selinfo" class="selinfo"></span>
   </div>
+  <div class="actions" style="margin-bottom:10px">
+    <button formaction="/trace" id="tracebtn">Skip trace selected</button>
+    <button formaction="/push" class="secondary">Send selected to DealMachine</button>
+    <span class="mute small">Leads traced in the last 90 days and leads exclusive to a client are skipped and cost nothing.</span>
+  </div>
+  <div id="tracelog" class="runlog" hidden></div>
   <div class="actions" style="margin-bottom:10px">
     <select name="bulk_status" aria-label="New status"><?php foreach (\Leads\Pipeline::STATUSES as $k => $label): ?><option value="<?= e($k) ?>"><?= e($label) ?></option><?php endforeach; ?></select>
     <button formaction="/leads/status" class="secondary">Set status</button>
@@ -125,7 +138,7 @@ $hidden = static function (string $query): string {
     <?php endif; ?>
   </div>
   <table>
-    <tr><th><input type="checkbox" onclick="document.querySelectorAll('.pick').forEach(c=>c.checked=this.checked)"></th><th>Score</th><th>Property</th><th class="hide-sm">Owner</th><th>Motivators</th><th class="hide-sm right">Equity</th><th>Contact</th></tr>
+    <tr><th><input type="checkbox" id="pickall" title="Select all on this page"></th><th>Score</th><th>Property</th><th class="hide-sm">Owner</th><th>Motivators</th><th class="hide-sm right">Equity</th><th>Contact</th></tr>
     <?php $allM = Motivators::all(); foreach ($rows as $r): ?>
     <tr>
       <td><input class="pick" type="checkbox" name="ids[]" value="<?= e($r['parcel_id']) ?>"></td>
@@ -149,3 +162,58 @@ $hidden = static function (string $query): string {
     <?php if ($page * $per < $total): ?><a class="btn secondary" href="<?= e(qs(['page' => $page + 1])) ?>">Next →</a><?php endif; ?>
   </div>
 </form>
+<script>
+(() => {
+  const form = document.getElementById('bulk'), total = +form.dataset.total, scope = document.getElementById('scope');
+  const all = document.getElementById('pickall'), info = document.getElementById('selinfo'), picks = [...document.querySelectorAll('.pick')];
+  const fmt = n => n.toLocaleString('en-US');
+  const render = () => {
+    const n = picks.filter(c => c.checked).length;
+    if (scope.value === 'all') {
+      info.innerHTML = `<b>All ${fmt(total)} matching leads selected.</b> <a href="#" data-act="clear">Clear selection</a>`;
+    } else if (n && n === picks.length && total > picks.length) {
+      info.innerHTML = `All ${fmt(n)} on this page selected. <a href="#" data-act="all">Select all ${fmt(total)} matching leads</a>`;
+    } else {
+      info.textContent = n ? `${fmt(n)} selected` : '';
+    }
+    form.querySelectorAll('button[formaction]').forEach(b => b.textContent = b.textContent.replace(/selected|all matching/, scope.value === 'all' ? 'all matching' : 'selected'));
+  };
+  all.onchange = () => { picks.forEach(c => c.checked = all.checked); if (!all.checked) scope.value = 'selected'; render(); };
+  picks.forEach(c => c.onchange = () => { if (!c.checked) { scope.value = 'selected'; all.checked = false; } render(); });
+  info.onclick = e => {
+    const a = e.target.closest('a'); if (!a) return; e.preventDefault();
+    if (a.dataset.act === 'all') { scope.value = 'all'; } else { scope.value = 'selected'; all.checked = false; picks.forEach(c => c.checked = false); }
+    render();
+  };
+  form.addEventListener('submit', e => {
+    if (scope.value === 'selected' && !picks.some(c => c.checked)) { e.preventDefault(); alert('Tick some leads first.'); return; }
+    const btn = e.submitter;
+    if (scope.value === 'all' && btn && btn.id !== 'tracebtn' && btn.getAttribute('formaction') !== '/deliver' && !confirm(`Apply "${btn.textContent.trim()}" to all ${fmt(total)} matching leads?`)) { e.preventDefault(); }
+  });
+  // "Skip trace all matching": trace in rounds of 250 until done, with a credit estimate first
+  document.getElementById('tracebtn').addEventListener('click', async e => {
+    if (scope.value !== 'all') return;
+    e.preventDefault();
+    const log = document.getElementById('tracelog'), btn = e.currentTarget;
+    const body = extra => new URLSearchParams({_csrf: form._csrf.value, query: form.query.value, ...extra});
+    const say = (t, cls) => { const d = document.createElement('div'); if (cls) d.className = cls; d.textContent = t; log.appendChild(d); log.scrollTop = log.scrollHeight; };
+    let est;
+    try { est = await (await fetch('/trace.json', {method: 'POST', body: body({dry: 1})})).json(); } catch { alert('Could not reach the server.'); return; }
+    if (!est.remaining) { alert('Nothing to trace: every matching lead was traced in the last 90 days (or is exclusive to a client).'); return; }
+    if (!confirm(`Skip trace ${fmt(est.remaining)} untraced leads?\n\nDealMachine charges about 2 credits per match (misses are free), so up to ~${fmt(est.max_credits)} credits.\nCredits left this month: ${fmt(est.credits_left)}. Tracing stops at your monthly cap.`)) return;
+    btn.disabled = true; log.hidden = false; log.textContent = '';
+    let matched = 0, credits = 0;
+    for (let round = 1; round <= 200; round++) {
+      say('Tracing the next 250…', 'mute');
+      let r;
+      try { const res = await fetch('/trace.json', {method: 'POST', body: body({})}); r = await res.json(); } catch { say('No answer from the server; stopped. Run it again to continue where it left off.', 'err'); break; }
+      if (r.error) { say('Stopped: ' + r.error, 'err'); break; }
+      matched += r.matched; credits += r.credits;
+      say(`  ${r.message} · ${fmt(r.remaining)} left · ${fmt(r.credits_left)} credits left this month`);
+      if (!r.submitted || !r.remaining) { say(`Done: ${fmt(matched)} matched, ${fmt(credits)} credits. Reloading…`, 'ok'); setTimeout(() => location.reload(), 2000); break; }
+    }
+    btn.disabled = false;
+  });
+  render();
+})();
+</script>

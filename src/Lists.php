@@ -50,7 +50,30 @@ final class Lists
             [$count, $new] = self::count($l);
             Db::run('UPDATE saved_lists SET last_count = ?, last_new = ?, last_counted_at = UTC_TIMESTAMP() WHERE id = ?', [$count, $new, $l['id']]);
         }
+        if ($id === null) {
+            self::countMotivators();
+        }
         return count($lists);
+    }
+
+    /** Working-pool leads (open, any score) per motivator, for the counts shown in the Leads page picker. */
+    public static function countMotivators(): array
+    {
+        [$where, $params] = LeadQuery::where(LeadQuery::filters(['min' => 0]));
+        $counts = [];
+        foreach (array_keys(Motivators::all()) as $k) {
+            [$sql, $args] = Motivators::sql($k);
+            $counts[$k] = (int)Db::val("SELECT COUNT(*) FROM properties p WHERE $where AND ($sql)", [...$params, ...$args]);
+        }
+        Db::setSetting('motivator_counts', (string)json_encode(['at' => gmdate('Y-m-d H:i:s'), 'counts' => $counts]));
+        return $counts;
+    }
+
+    /** @return array{at:?string, counts:array<string,int>} last computed motivator counts */
+    public static function motivatorCounts(): array
+    {
+        $d = json_decode((string)Db::setting('motivator_counts', ''), true);
+        return ['at' => $d['at'] ?? null, 'counts' => $d['counts'] ?? []];
     }
 
     /** @return array{0:int,1:int} total leads, leads first seen since the last export */

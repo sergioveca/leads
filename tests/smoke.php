@@ -205,6 +205,17 @@ $f = LeadQuery::filters(['all' => ['landlord'], 'any' => ['blight', 'fire'], 'no
 check(LeadQuery::filters((static function (string $q) { parse_str($q, $o); return $o; })(Lists::query($f))) == $f, 'saved query round-trips');
 echo 'list sizes: ' . implode(', ', array_map(static fn($l) => $l['name'] . '=' . Db::val('SELECT last_count FROM saved_lists WHERE id = ?', [$l['id']]), $presets)) . PHP_EOL;
 
+// ---------------------------------------------------------------- select all, auto min score, motivator counts
+check(LeadQuery::filters([])['min'] === 50 && LeadQuery::filters(['m' => ['fire' => 'all']])['min'] === 0
+    && LeadQuery::filters(['stack' => 3])['min'] === 0 && LeadQuery::filters(['m' => ['fire' => 'all'], 'min' => '40'])['min'] === 40,
+    'min score: 50 by default, 0 with motivators, explicit value wins');
+$q = http_build_query(['all' => ['landlord'], 'any' => ['blight', 'fire'], 'view' => 'all', 'status' => 'any']);
+check(LeadQuery::bulkIds(['scope' => 'all', 'query' => $q], $admin, 100) === ['T-RENT-BAD.'], 'select all matching resolves the filter (auto min 0)');
+check(LeadQuery::bulkIds(['scope' => 'selected', 'ids' => ['a', 'b', 'a']], $admin, 1) === ['a'], 'ticked ids are de-duplicated and limited');
+check(LeadQuery::bulkIds(['scope' => 'all', 'query' => $q], $admin, 100, 'p.traced_at IS NULL') === ['T-RENT-BAD.'], 'extra condition (untraced) applies');
+$mcounts = Lists::countMotivators();
+check(($mcounts['fire'] ?? 0) >= 1 && ($mcounts['high_equity'] ?? -1) === 0 && Lists::motivatorCounts()['at'] !== null, 'motivator counts computed and stored');
+
 echo PHP_EOL . ($fails ? "$fails check(s) FAILED" : 'All checks passed') . PHP_EOL;
 file_put_contents(LEADS_ROOT . '/storage/cache/smoke_parcel.txt', $a);
 exit($fails ? 1 : 0);

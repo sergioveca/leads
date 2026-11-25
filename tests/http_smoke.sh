@@ -35,6 +35,19 @@ if grep -q '"pending"' <<<"$RUN" && grep -q '"log"' <<<"$RUN"; then echo "ok   P
 page /lists "Tired landlords"
 page "/leads?m%5Blandlord%5D=all&m%5Bblight%5D=any&m%5Bfire%5D=any&min=0" "Motivators"
 page "/leads?stack=2&min=0&ptype=house" "Save list"
+page "/leads?per=250&min=0" "per page"
+page "/leads" 'placeholder="auto (50)"'
+page "/leads?m%5Bfire%5D=all" 'placeholder="auto (0)"'
+
+# "Skip trace all matching" estimate (dry run, no credits) answers with JSON
+TOKEN=$(curl -sS -b "$JAR" -c "$JAR" "$BASE/leads" | csrf)
+EST=$(curl -sS -b "$JAR" -c "$JAR" --data-urlencode "_csrf=$TOKEN" --data-urlencode "dry=1" --data-urlencode "query=all%5B%5D=blight&min=0" "$BASE/trace.json")
+if grep -q '"remaining"' <<<"$EST" && grep -q '"credits_left"' <<<"$EST"; then echo "ok   trace-all estimate: $EST"; else echo "FAIL trace-all estimate: $EST"; fails=$((fails+1)); fi
+
+# bulk status on all matching leads (select-all scope)
+curl -sS -b "$JAR" -c "$JAR" -o /dev/null --data-urlencode "_csrf=$TOKEN" --data-urlencode "scope=all" --data-urlencode "query=all[]=fire&view=all&status=any" \
+  --data-urlencode "bulk_status=contacted" --data-urlencode "back=/leads?view=all&status=contacted&min=0" "$BASE/leads/status"
+page "/leads?view=all&status=contacted&min=0" "lead(s) set to Contacted"
 
 # save a list from the Leads page, then it appears on /lists and exports
 TOKEN=$(curl -sS -b "$JAR" -c "$JAR" "$BASE/leads" | csrf)
