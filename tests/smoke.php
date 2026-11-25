@@ -317,7 +317,7 @@ $lt = Podio::fields(['name' => 'x', 'fields' => [$multi]], ['List Type' => ['_al
 $lt1 = Podio::fields(['name' => 'x', 'fields' => [['multiple' => false] + $multi]], ['List Type' => ['_all' => ['Tax Default', 'Code Violations']]])[0];
 check(($lt['list-type'] ?? null) === [32, 33] && ($lt1['list-type'] ?? null) === [32], 'Podio List Type: every matching option (multi-select) or the first (single)');
 check(PodioSeller::yearsBracket(3) === 'Less Than 5' && PodioSeller::yearsBracket(14) === '10 To 15' && PodioSeller::yearsBracket(25) === '20+', 'Years Owned brackets');
-check(str_contains($dd['list_type'], 'Tax Default') || $dd['list_type'] === '' , 'draft List Type uses Home Detroit options: ' . $dd['list_type']);
+check($dd['list_type'] !== '' && !array_diff(array_map('trim', explode(',', $dd['list_type'])), array_merge(array_values(PodioSeller::LIST_TYPES), ['Negative Equity'])), 'draft List Type uses Home Detroit options: ' . $dd['list_type']);
 check(PodioSeller::sameStreet('15517 Lauder St, Detroit, MI 48227', '15517 LAUDER') && !PodioSeller::sameStreet('15517 Lauder St', '15519 LAUDER'), 'Slack address matches the county address');
 try {
     PodioSeller::create($dd, $admin);
@@ -326,7 +326,7 @@ try {
     check(str_contains($e->getMessage(), 'PODIO_CLIENT_ID'), 'create without Podio credentials refuses');
 }
 \Leads\Exports::logSms($smsRows, 'Hot leads: individuals, houses (score 70+)');
-check(PodioSeller::draft('3135550001', null, '', [])['draft']['list_type'] === 'Hot leads: individuals, houses (score 70+)', 'SMS export remembers the list name for Podio List Type');
+check(str_contains(PodioSeller::draft('3135550001', null, '', [])['draft']['notes'], 'Leads list: Hot leads: individuals, houses (score 70+)'), 'SMS export remembers the list name (in the Podio notes)');
 Db::run("INSERT INTO podio_pushes (parcel_id, phone, seller_url, created_at) VALUES ('T-ESTATE.', '3135550001', 'https://podio.com/x', UTC_TIMESTAMP())");
 [$smsRows] = \Leads\Exports::smsRows($fx, $admin, 'https://leads.test');
 check($smsRows === [] && PodioSeller::draft('3135550001')['pushed'] !== null, 'a number sent to Podio leaves future SMS exports and shows as already sent');
