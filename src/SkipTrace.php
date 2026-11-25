@@ -172,6 +172,87 @@ final class SkipTrace
         return ['submitted' => count($props), 'matched' => $matched, 'credits' => $credits, 'message' => $msg];
     }
 
+    /** [street, city, zip] from a DealMachine property result ('' street = DealMachine had none). */
+    private static function dmAddress(array $r): array
+    {
+        $street = trim((string)($r['address'] ?? ''));
+        if ($street === '' && !empty($r['full_address'])) {
+            $street = trim(explode(',', (string)$r['full_address'])[0]);
+        }
+        $zip = substr(trim((string)($r['zip'] ?? '')), 0, 5);
+        return [mb_substr($street, 0, 190), mb_substr(trim((string)($r['city'] ?? '')), 0, 80) ?: null, $zip !== '' ? $zip : null];
+    }
+
+    /**
+     * Leads traced before DealMachine's address was stored: look the property up again with no contacts
+     * (repeat lookups are free on DealMachine) and keep only the address. Returns how many were handled.
+     */
+    public static function backfillAddresses(int $limit = 250): int
+    {
+        $props = [];
+        foreach (Db::all('SELECT parcel_id, county, apn, address, municipality, zip FROM properties WHERE dm_matched = 1 AND dm_address IS NULL LIMIT ' . max(1, min(250, $limit))) as $p) {
+            $props[$p['parcel_id']] = $p;
+        }
+        if (!$props) {
+            return 0;
+        }
+        [$key, $creditClient] = self::keyFor(null);
+        $dm = new DealMachine($key);
+        $credits = 0;
+        $done = [];
+        $save = static function (string $pid, array $res) use (&$done): void {
+            Db::run('UPDATE properties SET dm_address = ?, dm_city = ?, dm_zip = ? WHERE parcel_id = ?', [...self::dmAddress($res), $pid]);
+            $done[$pid] = true;
+        };
+        $byCounty = [];
+        foreach ($props as $pid => $p) {
+            $fips = DealMachine::FIPS[$p['county'] ?? 'WAYNE'] ?? null;
+            if ($fips !== null) {
+                $byCounty[$fips][(string)($p['apn'] ?: $pid)] = $pid;
+            }
+        }
+        foreach ($byCounty as $fips => $apnToPid) {
+            $apns = array_keys($apnToPid);
+            $res = $dm->enrichByApn($apns, 'none', (string)$fips);
+            $credits += (int)($res['credits']['used'] ?? 0);
+            foreach ($res['data'] ?? [] as $i => $r) {
+                $pid = $apnToPid[(string)($r['input']['apn'] ?? $apns[$i] ?? '')] ?? ($apnToPid[$apns[$i] ?? ''] ?? null);
+                if ($pid !== null && !empty($r['matched'])) {
+                    $save($pid, $r);
+                }
+            }
+        }
+        // matched by address the first time: same address lookup again
+        $addrMap = [];
+        foreach (array_diff_key($props, $done) as $pid => $p) {
+            if (trim((string)$p['address']) === '') {
+                continue;
+            }
+            $city = $p['municipality'] && !str_ends_with((string)$p['municipality'], ' COUNTY') ? $p['municipality'] : '';
+            $addrMap[trim($p['address']) . ($city ? ', ' . ucwords(strtolower($city)) : '') . ', MI' . ($p['zip'] ? ' ' . $p['zip'] : '')] = $pid;
+        }
+        if ($addrMap) {
+            $keys = array_keys($addrMap);
+            $res = $dm->enrichByAddress($keys, 'none');
+            $credits += (int)($res['credits']['used'] ?? 0);
+            foreach ($res['data'] ?? [] as $i => $r) {
+                $pid = $addrMap[(string)($r['input']['full_address'] ?? $keys[$i] ?? '')] ?? ($addrMap[$keys[$i] ?? ''] ?? null);
+                if ($pid !== null && !empty($r['matched'])) {
+                    $save($pid, $r);
+                }
+            }
+        }
+        // not found again: '' so they are not retried (the export falls back to the county address)
+        foreach (array_keys(array_diff_key($props, $done)) as $pid) {
+            Db::run("UPDATE properties SET dm_address = '' WHERE parcel_id = ?", [$pid]);
+        }
+        Db::run(
+            'INSERT INTO skiptrace_runs (client_id, user_id, trigger_type, submitted, matched, credits_used, message, created_at) VALUES (?, NULL, ?, ?, ?, ?, ?, UTC_TIMESTAMP())',
+            [$creditClient, 'address_backfill', count($props), count($done), $credits, sprintf('address backfill: %d looked up, %d found, %d credits', count($props), count($done), $credits)]
+        );
+        return count($props);
+    }
+
     private static function store(string $pid, array $r, ?int $clientId): void
     {
         $now = gmdate('Y-m-d H:i:s');
@@ -180,12 +261,12 @@ final class SkipTrace
         $dec = static fn($v, float $max) => ($v === null || $v === '' || !is_numeric($v)) ? null : round(max(-$max, min($max, (float)$v)), 2);
         $year = $int($r['year_built'] ?? null);
         Db::run(
-            'UPDATE properties SET dm_property_id = ?, dm_estimated_value = ?, dm_equity_amount = ?, dm_equity_pct = ?, dm_loan_balance = ?, dm_owner_occupied = ?,
+            'UPDATE properties SET dm_property_id = ?, dm_address = ?, dm_city = ?, dm_zip = ?, dm_estimated_value = ?, dm_equity_amount = ?, dm_equity_pct = ?, dm_loan_balance = ?, dm_owner_occupied = ?,
              dm_beds = ?, dm_baths = ?, dm_sqft = ?, dm_year_built = ?, dm_annual_tax = ?, dm_matched = 1, traced_at = ?, traced_by_client_id = ?, needs_score = 1,
              address = IF(address = \'\', ?, address), zip = COALESCE(zip, ?)
              WHERE parcel_id = ?',
             [
-                $r['dm_property_id'] ?? null, $int($r['estimated_value'] ?? null), $int($r['estimated_equity_amount'] ?? null),
+                $r['dm_property_id'] ?? null, ...self::dmAddress($r), $int($r['estimated_value'] ?? null), $int($r['estimated_equity_amount'] ?? null),
                 $dec($r['estimated_equity_percentage'] ?? null, 9999.99),
                 $int($r['total_estimated_loan_balance'] ?? null),
                 isset($r['owner_occupied']) ? ((bool)$r['owner_occupied'] ? 1 : 0) : null,

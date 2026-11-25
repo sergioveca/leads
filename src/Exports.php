@@ -46,8 +46,9 @@ final class Exports
             $n = (string)$r['number'];
             if (isset($byPhone[$n])) {
                 // same person owns several leads: one text, list the other addresses
-                if ($r['parcel_id'] !== $byPhone[$n]['parcel_id'] && !str_contains($byPhone[$n]['other_properties'], (string)$r['address'])) {
-                    $byPhone[$n]['other_properties'] = ltrim($byPhone[$n]['other_properties'] . '; ' . $r['address'], '; ');
+                $other = self::fullAddress($r);
+                if ($r['parcel_id'] !== $byPhone[$n]['parcel_id'] && !str_contains($byPhone[$n]['other_properties'], $other)) {
+                    $byPhone[$n]['other_properties'] = ltrim($byPhone[$n]['other_properties'] . '; ' . $other, '; ');
                 }
                 continue;
             }
@@ -108,14 +109,18 @@ final class Exports
         return [$nice($first), $nice($last)];
     }
 
-    /** "7296 Fenton St, Dearborn Heights, MI 48127": street in normal case, city, state, 5-digit zip. */
+    /**
+     * "7296 Fenton St, Dearborn Heights, MI 48127": street in normal case, city, state, 5-digit zip.
+     * DealMachine's address comes first: the county lists often drop the street type (St, Ave, Rd).
+     */
     public static function fullAddress(array $p): string
     {
+        $dm = trim((string)($p['dm_address'] ?? '')) !== '';
         $up = ['N', 'S', 'E', 'W', 'NE', 'NW', 'SE', 'SW', 'PO'];
-        $words = preg_split('/\s+/', trim((string)($p['address'] ?? ''))) ?: [];
+        $words = preg_split('/\s+/', trim((string)($dm ? $p['dm_address'] : ($p['address'] ?? '')))) ?: [];
         $street = implode(' ', array_map(static fn($w) => in_array(strtoupper($w), $up, true) ? strtoupper($w) : ucfirst(strtolower($w)), $words));
-        $city = self::city($p);
-        $zip = substr(trim((string)($p['zip'] ?? '')), 0, 5);
+        $city = $dm && !empty($p['dm_city']) ? ucwords(strtolower((string)$p['dm_city'])) : self::city($p);
+        $zip = substr(trim((string)(($dm && !empty($p['dm_zip'])) ? $p['dm_zip'] : ($p['zip'] ?? ''))), 0, 5);
         return implode(', ', array_filter([$street, $city, 'MI' . ($zip !== '' ? ' ' . $zip : '')], static fn($x) => $x !== ''));
     }
 

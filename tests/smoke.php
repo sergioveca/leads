@@ -253,7 +253,7 @@ $fx = LeadQuery::filters(['view' => 'all', 'status' => 'any', 'min' => 0, 'q' =>
 [$smsRows] = \Leads\Exports::smsRows($fx, $admin, 'https://leads.test');
 check(array_column($smsRows, 'phone') === ['3135550001'], 'SMS export: only mobile, not DNC, not opted out, each number once');
 check(array_slice(\Leads\Exports::SMS_COLUMNS, 0, 4) === ['first_name', 'last_name', 'phone', 'address'], 'SMS columns start with first_name, last_name, phone, address');
-check(($smsRows[0]['first_name'] ?? '') === 'Mary' && ($smsRows[0]['last_name'] ?? '') === 'Jones' && str_contains((string)($smsRows[0]['other_properties'] ?? ''), 'TEST'), 'SMS row: proper-case name, other property listed');
+check(($smsRows[0]['first_name'] ?? '') === 'Mary' && ($smsRows[0]['last_name'] ?? '') === 'Jones' && stripos((string)($smsRows[0]['other_properties'] ?? ''), 'TEST') !== false, 'SMS row: proper-case name, other property listed');
 Db::run("UPDATE properties SET dm_matched = 1, dm_estimated_value = 85000, dm_equity_pct = 72, dm_loan_balance = 0, dm_beds = 3, dm_baths = 1.5, dm_sqft = 1100, dm_owner_occupied = 0 WHERE parcel_id IN ('T-RENT-BAD.', 'T-ESTATE.')");
 [$smsRows] = \Leads\Exports::smsRows($fx, $admin, 'https://leads.test');
 $r0 = $smsRows[0] ?? [];
@@ -264,6 +264,12 @@ check(count(array_diff(\Leads\Exports::SMS_COLUMNS, array_keys($r0))) === 0, 'ev
 check(\Leads\Exports::fullAddress(['address' => '7296 FENTON ST', 'municipality' => 'DEARBORN HEIGHTS', 'zip' => '48127-1626']) === '7296 Fenton St, Dearborn Heights, MI 48127'
     && \Leads\Exports::fullAddress(['address' => '100 W SEVEN MILE', 'municipality' => 'WAYNE COUNTY', 'zip' => null]) === '100 W Seven Mile, MI', 'SMS address is the full address');
 check(preg_match('/^.+, MI( \d{5})?$/', (string)($r0['address'] ?? '')) === 1, 'SMS row address: ' . ($r0['address'] ?? ''));
+// DealMachine's street (with St/Ave/Rd) wins over the county's
+Db::run("UPDATE properties SET dm_address = '618 Gladstone St', dm_city = 'Detroit', dm_zip = '48202' WHERE parcel_id IN ('T-RENT-BAD.', 'T-ESTATE.')");
+[$smsRows] = \Leads\Exports::smsRows($fx, $admin, 'https://leads.test');
+check(($smsRows[0]['address'] ?? '') === '618 Gladstone St, Detroit, MI 48202', 'SMS address uses DealMachine street: ' . ($smsRows[0]['address'] ?? ''));
+check(\Leads\Exports::fullAddress(['address' => '618 GLADSTONE', 'municipality' => 'DETROIT', 'zip' => '48202', 'dm_address' => '', 'dm_city' => null]) === '618 Gladstone, Detroit, MI 48202', 'empty DealMachine address falls back to the county');
+check(isset(\Leads\Jobs::pending()['dm_address_backfill']) === false, 'no address backfill without a DealMachine key');
 
 // ---------------------------------------------------------------- Macomb county list
 // real Macomb BSA ids (from the Dec 2025 notice); tests/sources_live.php syncs their owners from the county layer

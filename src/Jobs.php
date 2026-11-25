@@ -62,6 +62,10 @@ final class Jobs
         $this->loop('scoring', fn() => Scoring::rescore(5000), 2);
         $this->every('list_counts', 3600, fn() => 'counted ' . Lists::recount() . ' lists', 15);
         $this->autoTrace();
+        if (Env::get('DEALMACHINE_API_KEY', '') !== '') {
+            // leads traced before DealMachine's street address (with St/Ave/Rd) was stored; repeat lookups are free
+            $this->loop('dm_address_backfill', fn() => SkipTrace::backfillAddresses(250), 20);
+        }
         $this->daily('dnc_recheck', fn() => 'checked ' . SkipTrace::recheckDnc(1000) . ' numbers', 20);
         Db::val("SELECT RELEASE_LOCK('leads_jobs')");
         return $this->log;
@@ -100,6 +104,10 @@ final class Jobs
         $unscored = (int)Db::val('SELECT COUNT(*) FROM properties WHERE needs_score = 1');
         if ($unscored > 0) {
             $left['scoring'] = number_format($unscored) . ' leads to score';
+        }
+        $noAddr = Env::get('DEALMACHINE_API_KEY', '') !== '' ? (int)Db::val('SELECT COUNT(*) FROM properties WHERE dm_matched = 1 AND dm_address IS NULL') : 0;
+        if ($noAddr > 0) {
+            $left['dm_address_backfill'] = number_format($noAddr) . ' traced leads without the full street address';
         }
         if (!$fresh($states['list_counts'] ?? null, 3600)) {
             $left['list_counts'] = 'counts older than an hour';
