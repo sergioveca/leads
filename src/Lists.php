@@ -52,6 +52,7 @@ final class Lists
         }
         if ($id === null) {
             self::countMotivators();
+            Suggestions::countAll();
         }
         return count($lists);
     }
@@ -99,7 +100,7 @@ final class Lists
         if ($f['none']) {
             $parts[] = 'Exclude: ' . $names($f['none']);
         }
-        if ($f['stack'] > 1) {
+        if ($f['stack'] > 0) {
             $parts[] = $f['stack'] . '+ signals stacked';
         }
         if ($f['ptype'] !== '') {

@@ -34,7 +34,7 @@ final class LeadQuery
         $stack = max(0, min(6, (int)($in['stack'] ?? 0)));
         return [
             'q' => trim((string)($in['q'] ?? '')),
-            'min' => ($in['min'] ?? '') === '' ? self::defaultMin($view, (bool)($all || $any || $none || $stack > 1)) : max(0, min(100, (int)$in['min'])),
+            'min' => ($in['min'] ?? '') === '' ? self::defaultMin($view, (bool)($all || $any || $none || $stack > 0)) : max(0, min(100, (int)$in['min'])),
             'all' => array_values(array_unique($all)),
             'any' => $any,
             'none' => $none,
@@ -133,7 +133,7 @@ final class LeadQuery
             $w[] = "NOT ($sql)";
             array_push($p, ...$args);
         }
-        if ($f['stack'] > 1) {
+        if ($f['stack'] > 0) {
             [$sql, $args] = Motivators::stackSql($f['stack']);
             $w[] = $sql;
             array_push($p, ...$args);

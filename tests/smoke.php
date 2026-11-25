@@ -216,6 +216,26 @@ check(LeadQuery::bulkIds(['scope' => 'all', 'query' => $q], $admin, 100, 'p.trac
 $mcounts = Lists::countMotivators();
 check(($mcounts['fire'] ?? 0) >= 1 && ($mcounts['high_equity'] ?? -1) === 0 && Lists::motivatorCounts()['at'] !== null, 'motivator counts computed and stored');
 
+// ---------------------------------------------------------------- suggested searches
+$sugBad = [];
+foreach (\Leads\Suggestions::all() as $key => $s) {
+    parse_str(\Leads\Suggestions::url($key), $in);
+    $f = LeadQuery::filters($in);
+    foreach (['all', 'any', 'none'] as $k) {
+        if (array_diff($s['query'][$k] ?? [], $f[$k])) {
+            $sugBad[] = "$key: unknown motivator in $k";
+        }
+    }
+    if (!isset(\Leads\Suggestions::GROUPS[$s['group']])) {
+        $sugBad[] = "$key: unknown group";
+    }
+}
+check(!$sugBad, 'every suggested search uses valid motivators and groups' . ($sugBad ? ': ' . implode('; ', $sugBad) : ''));
+$sc = \Leads\Suggestions::countAll();
+check(count($sc) === count(\Leads\Suggestions::all()) && ($sc['fire'] ?? 0) === 0 && ($sc['stacked3'] ?? 0) >= 1, 'suggested searches all run and count (fire excludes the company-owned fixture)');
+check(LeadQuery::filters(['stack' => 1])['stack'] === 1, 'stack 1+ is allowed');
+echo 'suggestion counts: ' . json_encode($sc) . PHP_EOL;
+
 echo PHP_EOL . ($fails ? "$fails check(s) FAILED" : 'All checks passed') . PHP_EOL;
 file_put_contents(LEADS_ROOT . '/storage/cache/smoke_parcel.txt', $a);
 exit($fails ? 1 : 0);

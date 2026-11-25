@@ -33,6 +33,8 @@ TOKEN=$(curl -sS -b "$JAR" -c "$JAR" "$BASE/admin" | csrf)
 RUN=$(curl -sS -b "$JAR" -c "$JAR" --max-time 90 --data-urlencode "_csrf=$TOKEN" "$BASE/admin/run.json")
 if grep -q '"pending"' <<<"$RUN" && grep -q '"log"' <<<"$RUN"; then echo "ok   POST /admin/run.json: $(cut -c1-300 <<<"$RUN")"; else echo "FAIL /admin/run.json: $(cut -c1-300 <<<"$RUN")"; fails=$((fails+1)); fi
 page /lists "Tired landlords"
+page /leads "Suggested searches"
+page "/leads?all%5B%5D=sheriff_sale&s=sheriff" "Small list, highest urgency"
 page "/leads?m%5Blandlord%5D=all&m%5Bblight%5D=any&m%5Bfire%5D=any&min=0" "Motivators"
 page "/leads?stack=2&min=0&ptype=house" "Save list"
 page "/leads?per=250&min=0" "per page"

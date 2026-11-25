@@ -29,6 +29,27 @@ $hidden = static function (string $query): string {
   <a href="/leads?view=all&amp;status=any" class="<?= $f['view'] === 'all' ? 'on' : '' ?>">All</a>
   <a href="/lists">Saved lists</a>
 </div>
+<?php
+$sugs = \Leads\Suggestions::all();
+$sugCounts = \Leads\Suggestions::counts();
+$sugNow = isset($_GET['s'], $sugs[(string)$_GET['s']]) ? (string)$_GET['s'] : '';
+?>
+<div class="card suggest">
+  <label class="suglabel">Suggested searches
+    <select onchange="if (this.value) location = '/leads?' + this.value">
+      <option value="">Pick a ready-made list…</option>
+      <?php foreach (\Leads\Suggestions::GROUPS as $g => $gName): ?>
+      <optgroup label="<?= e($gName) ?>">
+        <?php foreach ($sugs as $key => $s): if ($s['group'] !== $g) continue; ?>
+        <option value="<?= e(\Leads\Suggestions::url($key)) ?>" <?= $sugNow === $key ? 'selected' : '' ?>><?= e($s['name']) ?><?= isset($sugCounts[$key]) ? ' (' . number_format((int)$sugCounts[$key]) . ')' : '' ?></option>
+        <?php endforeach; ?>
+      </optgroup>
+      <?php endforeach; ?>
+    </select>
+  </label>
+  <?php if ($sugNow): ?><p class="sugwhy"><b><?= e($sugs[$sugNow]['name']) ?>:</b> <?= e($sugs[$sugNow]['why']) ?> <span class="mute">Adjust the filters below and click Filter, or Save list to keep it.</span></p>
+  <?php else: ?><p class="sugwhy mute">Each one fills in the filters below with a proven motivation combination; numbers are open leads right now. Plan on roughly a third to half of a list ending up callable after skip tracing (no match, landlines, DNC).</p><?php endif; ?>
+</div>
 <div class="card">
   <form method="get" action="/leads">
     <input type="hidden" name="view" value="<?= e($f['view']) ?>">
@@ -55,7 +76,7 @@ $hidden = static function (string $query): string {
     <div class="filters">
       <label>Stacked<select name="stack">
         <option value="">Any</option>
-        <?php foreach ([2, 3, 4] as $n): ?><option value="<?= $n ?>" <?= $f['stack'] === $n ? 'selected' : '' ?>><?= $n ?>+ distress signals</option><?php endforeach; ?>
+        <?php foreach ([1, 2, 3, 4] as $n): ?><option value="<?= $n ?>" <?= $f['stack'] === $n ? 'selected' : '' ?>><?= $n ?>+ distress signals</option><?php endforeach; ?>
       </select></label>
       <label>Property<select name="ptype">
         <option value="">Any</option>
