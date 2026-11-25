@@ -39,7 +39,7 @@ do {
     $n += $got;
 } while ($got > 0);
 $csvRows = 0;
-foreach (glob(LEADS_ROOT . '/data/treasurer/wayne_forfeited_*.csv') as $f) {
+foreach (glob(LEADS_ROOT . '/data/treasurer/*_forfeited_*.csv') as $f) {
     $csvRows += count(file($f)) - 1;
 }
 check($n === $csvRows, sprintf('treasurer import %d rows of %d (%.1fs)', $n, $csvRows, microtime(true) - $t));
@@ -236,7 +236,7 @@ check(count($sc) === count(\Leads\Suggestions::all()) && ($sc['fire'] ?? 0) === 
 check(LeadQuery::filters(['stack' => 1])['stack'] === 1, 'stack 1+ is allowed');
 echo 'suggestion counts: ' . json_encode($sc) . PHP_EOL;
 
-// ---------------------------------------------------------------- SMS and Podio exports
+// ---------------------------------------------------------------- SMS export
 $addContact = static function (string $pid, string $first, string $last, array $phones) use ($now): void {
     Db::run("INSERT INTO contacts (parcel_id, dm_person_id, full_name, first_name, last_name, contact_type, created_at) VALUES (?, ?, ?, ?, ?, 'owner', ?)",
         [$pid, 'dm-' . $pid, strtoupper("$first $last"), strtoupper($first), strtoupper($last), $now]);
@@ -254,10 +254,13 @@ $fx = LeadQuery::filters(['view' => 'all', 'status' => 'any', 'min' => 0, 'q' =>
 check(array_column($smsRows, 'phone') === ['3135550001'], 'SMS export: only mobile, not DNC, not opted out, each number once');
 check(array_slice(\Leads\Exports::SMS_COLUMNS, 0, 4) === ['first_name', 'last_name', 'phone', 'address'], 'SMS columns start with first_name, last_name, phone, address');
 check(($smsRows[0]['first_name'] ?? '') === 'Mary' && ($smsRows[0]['last_name'] ?? '') === 'Jones' && str_contains((string)($smsRows[0]['other_properties'] ?? ''), 'TEST'), 'SMS row: proper-case name, other property listed');
-$podio = \Leads\Exports::podioRows(LeadQuery::filters(['view' => 'all', 'status' => 'any', 'min' => 0, 'q' => 'T-RENT-BAD.']), $admin, 'https://leads.test');
-check(count($podio) === 1 && $podio[0]['phone_1'] !== '' && str_contains($podio[0]['notes'], 'wants 60k') && str_contains($podio[0]['motivators'], 'Rental without compliance cert')
-    && !str_contains($podio[0]['phone_1'] . $podio[0]['phone_2'] . $podio[0]['phone_3'], '555-0002') && !str_contains($podio[0]['phone_1'] . $podio[0]['phone_2'] . $podio[0]['phone_3'], '555-0004'),
-    'Podio export: callable phones only, notes and motivators included');
+Db::run("UPDATE properties SET dm_matched = 1, dm_estimated_value = 85000, dm_equity_pct = 72, dm_loan_balance = 0, dm_beds = 3, dm_baths = 1.5, dm_sqft = 1100, dm_owner_occupied = 0 WHERE parcel_id IN ('T-RENT-BAD.', 'T-ESTATE.')");
+[$smsRows] = \Leads\Exports::smsRows($fx, $admin, 'https://leads.test');
+$r0 = $smsRows[0] ?? [];
+check(($r0['est_value'] ?? '') === '85000' && ($r0['equity_pct'] ?? '') === '72' && ($r0['beds'] ?? '') === '3.0' && ($r0['owner_occupied'] ?? '') === 'no'
+    && ($r0['absentee'] ?? '') === 'yes' && str_contains((string)($r0['motivators'] ?? ''), 'Equity 50%+') && str_starts_with((string)($r0['lead_url'] ?? ''), 'https://leads.test/lead?id='),
+    'SMS row carries DealMachine property data, motivators and the lead link: ' . json_encode(array_intersect_key($r0, array_flip(['est_value', 'equity_pct', 'beds', 'owner_occupied', 'absentee']))));
+check(count(array_diff(\Leads\Exports::SMS_COLUMNS, array_keys($r0))) === 0, 'every SMS column is filled from the row');
 
 // ---------------------------------------------------------------- Macomb county list
 // real Macomb BSA ids (from the Dec 2025 notice); tests/sources_live.php syncs their owners from the county layer
@@ -281,8 +284,12 @@ $ms = Db::all("SELECT parcel_id, type, source_ref, event_date, amount FROM signa
 check(in_array('tax_big', Motivators::evaluate($mp, $ms), true) && in_array('tax_pending', Motivators::evaluate($mp, $ms), true), 'owes $5k+ and pending (2099 list)');
 check(str_contains((string)Db::val("SELECT score_reasons FROM properties WHERE parcel_id = '01-13-21-202-025'"), 'Owes $10,737 in back taxes'), 'score explains the amount owed');
 $mq = static fn(array $in) => array_column(Db::all('SELECT p.parcel_id FROM properties p WHERE ' . LeadQuery::where(LeadQuery::filters($in + ['view' => 'all', 'status' => 'any']))[0] . ' ORDER BY p.parcel_id', LeadQuery::where(LeadQuery::filters($in + ['view' => 'all', 'status' => 'any']))[1]), 'parcel_id');
-check($mq(['county' => 'macomb', 'min' => 0]) === ['01-13-21-202-024', '01-13-21-202-025', '01-13-21-202-026'], 'county filter');
-check($mq(['county' => 'MACOMB', 'm' => ['tax_big' => 'all']]) === ['01-13-21-202-024', '01-13-21-202-025'], '"owes $5k+" motivator');
+// the real 2026 Macomb list is also loaded, so check the fixtures by inclusion
+$fxIds = ['01-13-21-202-024', '01-13-21-202-025', '01-13-21-202-026'];
+$macomb = $mq(['county' => 'macomb', 'min' => 0]);
+check(!array_diff($fxIds, $macomb) && (int)Db::val("SELECT COUNT(*) FROM properties WHERE county = 'MACOMB'") === count($macomb) + (int)Db::val("SELECT COUNT(*) FROM properties WHERE county = 'MACOMB' AND (is_excluded = 1 OR status IN ('dead','closed'))"), 'county filter (' . count($macomb) . ' Macomb leads)');
+$bigs = array_intersect($fxIds, $mq(['county' => 'MACOMB', 'm' => ['tax_big' => 'all']]));
+check(array_values($bigs) === ['01-13-21-202-024', '01-13-21-202-025'], '"owes $5k+" motivator');
 [$sqlBig, $argsBig] = Motivators::sql('tax_big');
 check((int)Db::val("SELECT COUNT(*) FROM properties p WHERE p.county = 'WAYNE' AND ($sqlBig)", $argsBig) === 0, 'Wayne lists have no amounts, so never "owes $5k+"');
 check(\Leads\Sources\MacombParcels::propertyClass('V-R1') === 'RESIDENTIAL (zoning V-R1)' && str_starts_with((string)\Leads\Sources\MacombParcels::propertyClass('M-1'), 'COMMERCIAL')

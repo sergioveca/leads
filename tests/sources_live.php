@@ -35,6 +35,8 @@ foreach (array_keys(DetroitSignals::sources()) as $key) {
 }
 // Macomb owner sync for the 3 Macomb parcels tests/smoke.php imported
 try {
+    // only the 3 test parcels are due, so one batch must cover them (the real 2026 list is loaded too)
+    Db::run("UPDATE properties SET parcel_synced_at = UTC_TIMESTAMP() WHERE county = 'MACOMB' AND parcel_id NOT LIKE '01-13-21-202-02%'");
     $n = \Leads\Sources\MacombParcels::batch(150);
     $p = Db::one("SELECT owner1, address, municipality, apn, property_class, assessed_value, is_entity, parcel_synced_at FROM properties WHERE parcel_id = '01-13-21-202-024'");
     $ok = $n >= 3 && $p && $p['parcel_synced_at'] && stripos((string)$p['owner1'], 'LLC') !== false && (int)$p['is_entity'] === 1
