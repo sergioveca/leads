@@ -17,6 +17,9 @@ final class Motivators
         'money' => 'Equity (after skip trace)',
     ];
 
+    /** Back taxes owed (amount to redeem) that count as "big". */
+    public const BIG_TAX = 5000;
+
     /** Michigan's usual redemption period after a mortgage sheriff's sale (6 months), in days. */
     public const REDEMPTION_DAYS = 183;
 
@@ -39,6 +42,8 @@ final class Motivators
                 'sql' => $sig('tax_forfeiture')],
             'tax_multi' => ['label' => 'Tax list 2+ years', 'group' => 'distress', 'hint' => 'Forfeited in more than one year',
                 'sql' => "(SELECT COUNT(DISTINCT s.source_ref) FROM signals s WHERE s.parcel_id = p.parcel_id AND s.active = 1 AND s.type = 'tax_forfeiture') >= 2"],
+            'tax_big' => ['label' => 'Owes $5k+ in back taxes', 'group' => 'distress', 'hint' => 'Amount to redeem is $5,000 or more (Macomb notices list the amount; Wayne lists do not)',
+                'sql' => $sig('tax_forfeiture', ' AND s.amount >= ' . self::BIG_TAX)],
             'sheriff_sale' => ['label' => 'Mortgage foreclosure, in redemption', 'group' => 'distress', 'hint' => "Sheriff's sale in the last 6 months: owner can still sell or redeem",
                 'sql' => $sig('sheriff_sale', ' AND s.event_date >= CURDATE() - INTERVAL ' . self::REDEMPTION_DAYS . ' DAY')],
             'blight' => ['label' => 'Open blight tickets', 'group' => 'distress', 'hint' => 'Unpaid Detroit blight tickets (3 years)',
@@ -95,7 +100,8 @@ final class Motivators
     {
         $n = (int)($s['item_count'] ?? 0);
         return match ($s['type']) {
-            'tax_forfeiture' => 'Interested parties: ' . mb_strimwidth((string)$s['details'], 0, 300, '…'),
+            'tax_forfeiture' => ($s['amount'] !== null ? 'Owes ' . money($s['amount']) . ' to redeem (as of Dec 1). ' : '')
+                . 'Interested parties: ' . mb_strimwidth((string)$s['details'], 0, 300, '…'),
             'blight' => $n . ' open ticket(s), ' . money($s['amount']) . ' unpaid',
             'fire' => $n . ' building fire incident(s), latest ' . ($s['event_date'] ?? '?'),
             'rental' => 'Registered ' . ($s['event_date'] ?? ''),
@@ -118,7 +124,7 @@ final class Motivators
     public static function stackable(): array
     {
         $keys = array_keys(array_filter(self::all(), static fn($m) => in_array($m['group'], ['distress', 'life'], true)));
-        return array_values(array_diff($keys, ['tax_pending', 'tax_multi']));
+        return array_values(array_diff($keys, ['tax_pending', 'tax_multi', 'tax_big']));
     }
 
     /** @return array{0:string,1:array} SQL condition + params for one motivator */
@@ -165,6 +171,12 @@ final class Motivators
             }
             if (count(array_unique(array_column($by['tax_forfeiture'], 'source_ref'))) >= 2) {
                 $out[] = 'tax_multi';
+            }
+            foreach ($by['tax_forfeiture'] as $s) {
+                if (($s['amount'] ?? null) !== null && (float)$s['amount'] >= self::BIG_TAX) {
+                    $out[] = 'tax_big';
+                    break;
+                }
             }
         }
         $redemptionFrom = gmdate('Y-m-d', strtotime($today . ' UTC') - self::REDEMPTION_DAYS * 86400);

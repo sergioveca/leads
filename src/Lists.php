@@ -16,7 +16,7 @@ final class Lists
             }
         }
         $defaults = LeadQuery::filters(['view' => $f['view']]);
-        foreach (['q', 'min', 'stack', 'ptype', 'muni', 'traced', 'zip', 'status', 'view', 'client', 'sort'] as $k) {
+        foreach (['q', 'min', 'stack', 'ptype', 'county', 'muni', 'traced', 'zip', 'status', 'view', 'client', 'sort'] as $k) {
             if ($f[$k] !== $defaults[$k] && $f[$k] !== '' && $f[$k] !== 0) {
                 $q[$k] = $f[$k];
             }
@@ -105,6 +105,9 @@ final class Lists
         }
         if ($f['ptype'] !== '') {
             $parts[] = $f['ptype'] === 'house' ? 'Houses only' : 'Vacant land only';
+        }
+        if ($f['county'] !== '') {
+            $parts[] = ucfirst(strtolower($f['county'])) . ' County';
         }
         if ($f['muni'] !== '') {
             $parts[] = $f['muni'];

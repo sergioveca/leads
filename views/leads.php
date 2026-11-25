@@ -93,6 +93,11 @@ $sugNow = isset($_GET['s'], $sugs[(string)$_GET['s']]) ? (string)$_GET['s'] : ''
       <?php if ($f['view'] !== 'pool' && $clients): ?>
       <label>Client<select name="client"><option value="">All</option><?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= $f['client'] === (int)$c['id'] ? 'selected' : '' ?>><?= e($c['name']) ?></option><?php endforeach; ?></select></label>
       <?php endif; ?>
+      <label>County<select name="county">
+        <option value="">All</option>
+        <option value="WAYNE" <?= $f['county'] === 'WAYNE' ? 'selected' : '' ?>>Wayne</option>
+        <option value="MACOMB" <?= $f['county'] === 'MACOMB' ? 'selected' : '' ?>>Macomb</option>
+      </select></label>
       <label>City<select name="muni"><option value="">All</option>
         <?php foreach ($munis as $mu): ?><option <?= $f['muni'] === $mu ? 'selected' : '' ?>><?= e($mu) ?></option><?php endforeach; ?>
       </select></label>

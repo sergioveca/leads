@@ -41,6 +41,7 @@ final class LeadQuery
             'stack' => $stack,
             'ptype' => in_array($in['ptype'] ?? '', ['house', 'land'], true) ? $in['ptype'] : '',
             'muni' => trim((string)($in['muni'] ?? '')),
+            'county' => in_array(strtoupper((string)($in['county'] ?? '')), ['WAYNE', 'MACOMB'], true) ? strtoupper((string)$in['county']) : '',
             'traced' => in_array($in['traced'] ?? '', ['yes', 'no', 'phone'], true) ? $in['traced'] : '',
             'zip' => preg_replace('/\D/', '', (string)($in['zip'] ?? '')) ?? '',
             'status' => ($status === 'any' || $status === 'open' || isset(Pipeline::STATUSES[$status])) ? $status : 'open',
@@ -142,6 +143,10 @@ final class LeadQuery
             $w[] = "p.property_class LIKE '%RESIDENTIAL%' AND p.property_class NOT LIKE '%VACANT%'";
         } elseif ($f['ptype'] === 'land') {
             $w[] = "p.property_class LIKE '%VACANT%'";
+        }
+        if ($f['county'] !== '') {
+            $w[] = 'p.county = ?';
+            $p[] = $f['county'];
         }
         if ($f['muni'] !== '') {
             $w[] = 'p.municipality = ?';

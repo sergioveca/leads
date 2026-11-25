@@ -8,7 +8,8 @@ use Leads\Http;
 use Leads\Log;
 
 /**
- * Wayne County Treasurer "Notice of Forfeited Property Subject to Foreclosure" lists.
+ * County Treasurer tax foreclosure lists (Wayne: "Notice of Forfeited Property Subject to Foreclosure"; Macomb:
+ * "Notice of Properties Subject to Foreclosure", see COUNTIES).
  * The PDFs are converted to CSV by tools/parse_treasurer_pdf.py (data/treasurer/*.csv, shipped with the app).
  * - Import: every CSV not yet imported (by file name + size) becomes type=tax_forfeiture signals.
  * - Watch: checks the Treasurer page daily and records when a newer list is published.
@@ -22,13 +23,28 @@ final class Treasurer
     // but allows tool ones (verified 2026-11-24). Same value as tools/fetch_treasurer_list.py.
     private const UA = 'curl/8.5.0 Leads/1.0 (+https://leads.4-return.com)';
 
+    /**
+     * County lists in data/treasurer, by file-name prefix: <prefix>_forfeited_<year>.csv.
+     * Macomb lists come from the county's December newspaper notice (tools/parse_macomb_notice.py) and carry the
+     * amount owed in a 6th column. Macomb parcel ids are BSA ids ("01-13-21-202-024"); DealMachine's APN is the
+     * local tax id without the 2-digit community prefix.
+     */
+    public const COUNTIES = [
+        'wayne' => ['county' => 'WAYNE', 'source' => 'Wayne County Treasurer', 'fallback_muni' => 'WAYNE COUNTY'],
+        'macomb' => ['county' => 'MACOMB', 'source' => 'Macomb County Treasurer', 'fallback_muni' => 'MACOMB COUNTY'],
+    ];
+
     /** Imports up to $maxRows rows from pending CSVs. Returns rows imported. */
     public static function import(int $maxRows = 20000): int
     {
-        $files = glob(LEADS_ROOT . '/data/treasurer/wayne_forfeited_*.csv') ?: [];
+        $files = glob(LEADS_ROOT . '/data/treasurer/*_forfeited_*.csv') ?: [];
         sort($files);
         $total = 0;
         foreach ($files as $file) {
+            $c = self::COUNTIES[strtolower(strstr(basename($file), '_', true))] ?? null;
+            if ($c === null) {
+                continue;
+            }
             $key = 'treasurer_file:' . basename($file);
             $sig = (string)filesize($file);
             $state = Db::setting($key);
@@ -50,18 +66,19 @@ final class Treasurer
                 if ($i++ < $offset) {
                     continue;
                 }
-                [$pid, $addr, $muni, $parties, $listYear] = array_pad($row, 5, '');
+                [$pid, $addr, $muni, $parties, $listYear, $owed] = array_pad($row, 6, '');
                 $pid = trim($pid);
                 if ($pid === '') {
                     continue;
                 }
                 $listYear = (int)$listYear ?: $year;
+                $owed = trim(str_replace([',', '$'], '', (string)$owed));
                 $signals[] = [
                     'parcel_id' => $pid,
                     'type' => 'tax_forfeiture',
-                    'source' => 'Wayne County Treasurer',
+                    'source' => $c['source'],
                     'source_ref' => (string)$listYear,
-                    'amount' => null,
+                    'amount' => is_numeric($owed) ? round((float)$owed, 2) : null,
                     'item_count' => null,
                     'event_date' => sprintf('%d-03-31', $listYear),
                     'details' => mb_substr($parties, 0, 2000),
@@ -71,7 +88,9 @@ final class Treasurer
                 ];
                 $props[] = [
                     'parcel_id' => $pid,
-                    'municipality' => mb_substr(trim($muni) !== '' ? strtoupper(trim($muni)) : 'WAYNE COUNTY', 0, 80),
+                    'county' => $c['county'],
+                    'apn' => $c['county'] === 'MACOMB' && preg_match('/^\d{2}-(.+)$/', $pid, $mm) ? $mm[1] : null,
+                    'municipality' => mb_substr(trim($muni) !== '' ? strtoupper(trim($muni)) : $c['fallback_muni'], 0, 80),
                     'address' => mb_substr(trim($addr), 0, 190),
                     'first_seen_at' => $now,
                     'updated_at' => $now,
@@ -104,7 +123,7 @@ final class Treasurer
         }
         Db::upsert('properties', $props, ['needs_score', 'updated_at']);
         // fill address/municipality only where we have none yet (Detroit parcel file is authoritative)
-        Db::upsert('signals', $signals, ['details', 'active', 'last_seen_at']);
+        Db::upsert('signals', $signals, ['amount', 'details', 'active', 'last_seen_at']);
     }
 
     /** Daily: look for a newer list on the Treasurer page. Returns a status message. */

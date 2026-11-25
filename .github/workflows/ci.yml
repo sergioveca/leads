@@ -86,3 +86,8 @@ jobs:
           python3 tools/fetch_treasurer_list.py --year 2026 --dry-run | tee out.txt
           expected=$(($(wc -l < data/treasurer/wayne_forfeited_2026.csv) - 1))
           grep -q "Parsed $expected parcels" out.txt || { echo "Parsed count differs from the committed CSV ($expected)"; exit 1; }
+      - name: Dry run against the live Macomb notice
+        run: |
+          set -o pipefail
+          python3 tools/fetch_macomb_notice.py --dry-run | tee out.txt
+          grep -q "Dry run: nothing written" out.txt

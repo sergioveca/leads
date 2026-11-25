@@ -45,12 +45,15 @@ final class DealMachine
         return $this->call('GET', '/usage');
     }
 
-    /** @param string[] $apns max 250 */
-    public function enrichByApn(array $apns, string $audience = 'owners'): array
+    /** County FIPS codes DealMachine expects for APN lookups. */
+    public const FIPS = ['WAYNE' => self::WAYNE_FIPS, 'MACOMB' => '26099', 'OAKLAND' => '26125'];
+
+    /** @param string[] $apns max 250, all in one county */
+    public function enrichByApn(array $apns, string $audience = 'owners', string $fips = self::WAYNE_FIPS): array
     {
         return $this->call('POST', '/enrichment/apn', [
             'data' => array_map(static fn($a) => ['apn' => $a], array_values($apns)),
-            'location' => ['type' => 'county', 'code' => self::WAYNE_FIPS],
+            'location' => ['type' => 'county', 'code' => $fips],
             'contact_audience' => $audience,
         ]);
     }

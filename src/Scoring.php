@@ -123,6 +123,11 @@ final class Scoring
             $s += 5;
             $r[] = 'Registered rental (landlord) (+5)';
         }
+        if (in_array('tax_big', $m, true)) {
+            $owed = max(array_map(static fn($x) => (float)($x['amount'] ?? 0), $by['tax_forfeiture'] ?? [['amount' => 0]]));
+            $s += 5;
+            $r[] = sprintf('Owes $%s in back taxes (+5)', number_format($owed));
+        }
         if (in_array('long_owned', $m, true)) {
             $s += 5;
             $r[] = 'Owned 20+ years (+5)';

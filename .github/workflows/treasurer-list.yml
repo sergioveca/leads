@@ -1,9 +1,8 @@
-# Loads new Wayne County Treasurer forfeiture lists automatically.
-# Daily: find the newest list on the Treasurer page; if it is new (or its PDF changed), parse it,
-# validate it, and commit data/treasurer/wayne_forfeited_<year>.csv to main. The push deploys to
-# leads.4-return.com and the next scheduled run imports it (resumable, ~20k rows per run).
-# A failed run (page changed, PDF layout changed, validation failed) commits nothing and GitHub
-# emails the repo owner.
+# Loads new county tax foreclosure lists automatically (Wayne Treasurer list, Macomb December notice).
+# Daily: find each county's newest list; if it is new (or its PDF changed), parse it, validate it, and commit
+# data/treasurer/<county>_forfeited_<year>.csv to main. The push deploys to leads.4-return.com and the next
+# scheduled run imports it (resumable, ~20k rows per run). Counties run independently: one failing doesn't
+# block the other. A failed scheduled run commits nothing for that county and opens an issue (see bottom).
 name: Treasurer list
 
 on:
@@ -11,11 +10,16 @@ on:
     - cron: "17 12 * * *" # daily, ~7-8 a.m. Detroit
   workflow_dispatch:
     inputs:
+      county:
+        description: "Which county"
+        type: choice
+        options: [all, wayne, macomb]
+        default: all
       year:
-        description: "List year (blank = newest on the page)"
+        description: "Wayne list year (blank = newest on the page)"
         required: false
       pdf_url:
-        description: "PDF URL (only if the page link can't be found; needs year)"
+        description: "PDF URL (only if the page link can't be found; Wayne needs year too)"
         required: false
       dry_run:
         description: "Parse and validate only, commit nothing"
@@ -46,14 +50,17 @@ jobs:
       - name: Install pdftotext
         run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
 
-      - name: Fetch, parse and validate
-        id: fetch
+      - name: Wayne - fetch, parse and validate
+        id: wayne
+        if: inputs.county == '' || inputs.county == 'all' || inputs.county == 'wayne'
+        continue-on-error: true
         env:
           YEAR: ${{ inputs.year }}
           PDF_URL: ${{ inputs.pdf_url }}
           DRY_RUN: ${{ inputs.dry_run }}
           FORCE: ${{ inputs.force }}
         run: |
+          set -o pipefail
           args=()
           [ -n "$YEAR" ] && args+=(--year "$YEAR")
           [ -n "$PDF_URL" ] && args+=(--pdf-url "$PDF_URL")
@@ -61,18 +68,43 @@ jobs:
           [ "$FORCE" = "true" ] && args+=(--force)
           python3 tools/fetch_treasurer_list.py "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Commit new list
-        if: steps.fetch.outputs.changed == 'true'
+      - name: Macomb - fetch, parse and validate
+        id: macomb
+        if: inputs.county == '' || inputs.county == 'all' || inputs.county == 'macomb'
+        continue-on-error: true
         env:
-          YEAR: ${{ steps.fetch.outputs.year }}
-          ROWS: ${{ steps.fetch.outputs.rows }}
+          PDF_URL: ${{ inputs.county == 'macomb' && inputs.pdf_url || '' }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -o pipefail
+          args=()
+          [ -n "$PDF_URL" ] && args+=(--pdf-url "$PDF_URL")
+          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          [ "$FORCE" = "true" ] && args+=(--force)
+          python3 tools/fetch_macomb_notice.py "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit new lists
+        if: steps.wayne.outputs.changed == 'true' || steps.macomb.outputs.changed == 'true'
+        env:
+          MSG: >-
+            ${{ steps.wayne.outputs.changed == 'true' && format('Wayne {0}: {1} parcels. ', steps.wayne.outputs.year, steps.wayne.outputs.rows) || '' }}${{ steps.macomb.outputs.changed == 'true' && format('Macomb {0}: {1} parcels.', steps.macomb.outputs.year, steps.macomb.outputs.rows) || '' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/treasurer/
           if git diff --cached --quiet; then echo "No change to commit"; exit 0; fi
-          git commit -m "Treasurer list $YEAR: $ROWS parcels (automatic)"
+          git commit -m "Treasurer lists (automatic): $MSG"
           git push origin HEAD:main
+
+      - name: Fail if a county failed
+        if: steps.wayne.outcome == 'failure' || steps.macomb.outcome == 'failure'
+        env:
+          WAYNE: ${{ steps.wayne.outcome }}
+          MACOMB: ${{ steps.macomb.outcome }}
+        run: |
+          echo "Wayne: $WAYNE, Macomb: $MACOMB"
+          exit 1
 
       # Actions emails are off for the repo owner, so a failure of this job opens an issue instead
       # (issues still email). One open issue at a time; it is closed by the next successful run.
@@ -81,10 +113,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WAYNE: ${{ steps.wayne.outcome }}
+          MACOMB: ${{ steps.macomb.outcome }}
         run: |
           title="Treasurer list import failed"
           open=$(gh issue list --state open --search "\"$title\" in:title" --json number -q '.[0].number')
-          body="The daily Treasurer list job failed on $(date -u +%F). Run log: $RUN_URL
+          body="The daily Treasurer list job failed on $(date -u +%F) (Wayne: $WAYNE, Macomb: $MACOMB). Run log: $RUN_URL
           Likely causes: the county page or PDF layout changed, or the county site blocked the runner.
           See docs/deploy.md (New Treasurer list) for the manual fallback."
           if [ -n "$open" ]; then

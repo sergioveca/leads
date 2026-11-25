@@ -33,5 +33,17 @@ foreach (array_keys(DetroitSignals::sources()) as $key) {
         $fails++;
     }
 }
+// Macomb owner sync for the 3 Macomb parcels tests/smoke.php imported
+try {
+    $n = \Leads\Sources\MacombParcels::batch(150);
+    $p = Db::one("SELECT owner1, address, municipality, apn, property_class, assessed_value, is_entity, parcel_synced_at FROM properties WHERE parcel_id = '01-13-21-202-024'");
+    $ok = $n >= 3 && $p && $p['parcel_synced_at'] && stripos((string)$p['owner1'], 'LLC') !== false && (int)$p['is_entity'] === 1
+        && $p['municipality'] === 'CENTER LINE' && $p['apn'] === '13-21-202-024' && (int)$p['assessed_value'] > 0;
+    echo ($ok ? 'ok   ' : 'FAIL ') . "macomb_parcels synced $n: " . json_encode($p) . "\n";
+    $fails += $ok ? 0 : 1;
+} catch (\Throwable $e) {
+    echo 'FAIL macomb_parcels: ' . $e->getMessage() . "\n";
+    $fails++;
+}
 echo $fails ? "$fails source(s) FAILED\n" : "All sources OK\n";
 exit($fails ? 1 : 0);

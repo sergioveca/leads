@@ -78,7 +78,7 @@ final class SkipTrace
         $dm = new DealMachine($key);
         $props = [];
         $in = implode(',', array_fill(0, count($parcelIds), '?'));
-        foreach (Db::all("SELECT parcel_id, address, municipality, zip FROM properties WHERE parcel_id IN ($in)", $parcelIds) as $p) {
+        foreach (Db::all("SELECT parcel_id, county, apn, address, municipality, zip FROM properties WHERE parcel_id IN ($in)", $parcelIds) as $p) {
             $props[$p['parcel_id']] = $p;
         }
         if (!$props) {
@@ -87,20 +87,41 @@ final class SkipTrace
 
         $matched = 0;
         $credits = 0;
-        $byApn = $dm->enrichByApn(array_keys($props));
-        $credits += (int)($byApn['credits']['used'] ?? 0);
+        // APN lookup, one call per county (DealMachine needs the county FIPS); apn column overrides parcel_id
         $misses = [];
-        foreach ($byApn['data'] ?? [] as $i => $res) {
-            $apn = (string)($res['input']['apn'] ?? array_keys($props)[$i] ?? '');
-            $pid = isset($props[$apn]) ? $apn : (array_keys($props)[$i] ?? null);
-            if ($pid === null) {
+        $byCounty = [];
+        foreach ($props as $pid => $p) {
+            $fips = DealMachine::FIPS[$p['county'] ?? 'WAYNE'] ?? null;
+            if ($fips === null) {
+                $misses[] = $pid; // unknown county: address lookup only
                 continue;
             }
-            if (!empty($res['matched'])) {
-                self::store($pid, $res, $creditClient);
-                $matched++;
-            } else {
-                $misses[] = $pid;
+            $byCounty[$fips][(string)($p['apn'] ?: $pid)] = $pid;
+        }
+        foreach ($byCounty as $fips => $apnToPid) {
+            $apns = array_keys($apnToPid);
+            $byApn = $dm->enrichByApn($apns, 'owners', (string)$fips);
+            $credits += (int)($byApn['credits']['used'] ?? 0);
+            $seen = [];
+            foreach ($byApn['data'] ?? [] as $i => $res) {
+                $apn = (string)($res['input']['apn'] ?? $apns[$i] ?? '');
+                $pid = $apnToPid[$apn] ?? ($apnToPid[$apns[$i] ?? ''] ?? null);
+                if ($pid === null) {
+                    continue;
+                }
+                $seen[$pid] = true;
+                if (!empty($res['matched'])) {
+                    self::store($pid, $res, $creditClient);
+                    $matched++;
+                } else {
+                    $misses[] = $pid;
+                }
+            }
+            // parcels missing from the reply still get the address lookup
+            foreach ($apnToPid as $pid) {
+                if (!isset($seen[$pid])) {
+                    $misses[] = $pid;
+                }
             }
         }
 
@@ -111,7 +132,7 @@ final class SkipTrace
             if (trim((string)$p['address']) === '' || str_starts_with(trim((string)$p['address']), '0 ')) {
                 continue;
             }
-            $city = $p['municipality'] && $p['municipality'] !== 'WAYNE COUNTY' ? $p['municipality'] : '';
+            $city = $p['municipality'] && !str_ends_with((string)$p['municipality'], ' COUNTY') ? $p['municipality'] : '';
             $full = trim($p['address']) . ($city ? ', ' . ucwords(strtolower($city)) : '') . ', MI' . ($p['zip'] ? ' ' . $p['zip'] : '');
             $addrMap[$full] = $pid;
         }

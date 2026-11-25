@@ -144,7 +144,7 @@ foreach (Db::all("SELECT * FROM properties WHERE parcel_id IN ($in)", $ids) as $
     $props[$r['parcel_id']] = $r;
 }
 $sigRows = [];
-foreach (Db::all("SELECT parcel_id, type, source_ref, event_date FROM signals WHERE active = 1 AND parcel_id IN ($in)", $ids) as $s) {
+foreach (Db::all("SELECT parcel_id, type, source_ref, event_date, amount FROM signals WHERE active = 1 AND parcel_id IN ($in)", $ids) as $s) {
     $sigRows[$s['parcel_id']][] = $s;
 }
 $php = [];
@@ -235,6 +235,35 @@ $sc = \Leads\Suggestions::countAll();
 check(count($sc) === count(\Leads\Suggestions::all()) && ($sc['fire'] ?? 0) === 0 && ($sc['stacked3'] ?? 0) >= 1, 'suggested searches all run and count (fire excludes the company-owned fixture)');
 check(LeadQuery::filters(['stack' => 1])['stack'] === 1, 'stack 1+ is allowed');
 echo 'suggestion counts: ' . json_encode($sc) . PHP_EOL;
+
+// ---------------------------------------------------------------- Macomb county list
+// real Macomb BSA ids (from the Dec 2025 notice); tests/sources_live.php syncs their owners from the county layer
+$mfile = LEADS_ROOT . '/data/treasurer/macomb_forfeited_2099.csv';
+file_put_contents($mfile, "parcel_id,address,municipality,interested_parties,list_year,amount_owed\n"
+    . "01-13-21-202-024,26673 LAWRENCE,CENTER LINE,26673 LAWRENCE AVE CENTER LINE LLC,2099,22832.28\n"
+    . "01-13-21-202-025,26641 LAWRENCE,CENTER LINE,FRANKLIN EUPHEMIA; THE HUNTINGTON NATIONAL BANK,2099,\"10,736.83\"\n"
+    . "01-13-21-202-026,LAWRENCE,CENTER LINE,SOMEONE,2099,2619.06\n");
+try {
+    check(Treasurer::import() === 3, 'Macomb CSV imports (3 rows)');
+} finally {
+    @unlink($mfile);
+}
+$mp = Db::one("SELECT * FROM properties WHERE parcel_id = '01-13-21-202-025'");
+check($mp && $mp['county'] === 'MACOMB' && $mp['apn'] === '13-21-202-025' && $mp['municipality'] === 'CENTER LINE', 'Macomb property: county, DealMachine APN without community prefix, city');
+check((float)Db::val("SELECT amount FROM signals WHERE parcel_id = '01-13-21-202-025' AND type = 'tax_forfeiture'") === 10736.83, 'amount owed stored ("10,736.83")');
+check((int)Db::val("SELECT COUNT(*) FROM properties WHERE county = 'WAYNE'") === (int)Db::val("SELECT COUNT(*) FROM properties WHERE county <> 'MACOMB'"), 'existing properties default to Wayne');
+while (Scoring::rescore(5000) > 0) {
+}
+$ms = Db::all("SELECT parcel_id, type, source_ref, event_date, amount FROM signals WHERE parcel_id = '01-13-21-202-025' AND active = 1");
+check(in_array('tax_big', Motivators::evaluate($mp, $ms), true) && in_array('tax_pending', Motivators::evaluate($mp, $ms), true), 'owes $5k+ and pending (2099 list)');
+check(str_contains((string)Db::val("SELECT score_reasons FROM properties WHERE parcel_id = '01-13-21-202-025'"), 'Owes $10,737 in back taxes'), 'score explains the amount owed');
+$mq = static fn(array $in) => array_column(Db::all('SELECT p.parcel_id FROM properties p WHERE ' . LeadQuery::where(LeadQuery::filters($in + ['view' => 'all', 'status' => 'any']))[0] . ' ORDER BY p.parcel_id', LeadQuery::where(LeadQuery::filters($in + ['view' => 'all', 'status' => 'any']))[1]), 'parcel_id');
+check($mq(['county' => 'macomb', 'min' => 0]) === ['01-13-21-202-024', '01-13-21-202-025', '01-13-21-202-026'], 'county filter');
+check($mq(['county' => 'MACOMB', 'm' => ['tax_big' => 'all']]) === ['01-13-21-202-024', '01-13-21-202-025'], '"owes $5k+" motivator');
+[$sqlBig, $argsBig] = Motivators::sql('tax_big');
+check((int)Db::val("SELECT COUNT(*) FROM properties p WHERE p.county = 'WAYNE' AND ($sqlBig)", $argsBig) === 0, 'Wayne lists have no amounts, so never "owes $5k+"');
+check(\Leads\Sources\MacombParcels::propertyClass('V-R1') === 'RESIDENTIAL (zoning V-R1)' && str_starts_with((string)\Leads\Sources\MacombParcels::propertyClass('M-1'), 'COMMERCIAL')
+    && \Leads\Sources\MacombParcels::community('SAINT CLAIR SHORES') === 'ST CLAIR SHORES', 'Macomb zoning and community names normalized');
 
 echo PHP_EOL . ($fails ? "$fails check(s) FAILED" : 'All checks passed') . PHP_EOL;
 file_put_contents(LEADS_ROOT . '/storage/cache/smoke_parcel.txt', $a);

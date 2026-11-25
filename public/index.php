@@ -159,7 +159,7 @@ switch (true) {
         if ($rows) {
             $ids = array_column($rows, 'parcel_id');
             $in = implode(',', array_fill(0, count($ids), '?'));
-            foreach (Db::all("SELECT parcel_id, type, source_ref, event_date FROM signals WHERE active = 1 AND parcel_id IN ($in)", $ids) as $s) {
+            foreach (Db::all("SELECT parcel_id, type, source_ref, event_date, amount FROM signals WHERE active = 1 AND parcel_id IN ($in)", $ids) as $s) {
                 $sigs[$s['parcel_id']][] = $s;
             }
         }
@@ -167,7 +167,7 @@ switch (true) {
             $r['motivators'] = Motivators::evaluate($r, $sigs[$r['parcel_id']] ?? []);
         }
         unset($r);
-        $munis = array_column(Db::all('SELECT municipality, COUNT(*) n FROM properties WHERE is_excluded = 0 GROUP BY municipality ORDER BY n DESC LIMIT 40'), 'municipality');
+        $munis = array_column(Db::all('SELECT municipality, COUNT(*) n FROM properties WHERE is_excluded = 0 GROUP BY municipality ORDER BY n DESC LIMIT 80'), 'municipality');
         $clients = $isAdmin ? Db::all('SELECT id, name FROM clients WHERE id <> ? ORDER BY name', [$clientId ?? 0]) : [];
         $list = !empty($_GET['list']) ? Db::one('SELECT * FROM saved_lists WHERE id = ?', [(int)$_GET['list']]) : null;
         View::render('leads', compact('f', 'rows', 'total', 'page', 'per', 'munis', 'clients', 'isAdmin', 'list'), 'Leads');
@@ -365,7 +365,7 @@ switch (true) {
             'absentee', 'est_value', 'equity_pct', 'loan_balance', 'motivators', 'score_reasons', 'contact_1', 'phone_1', 'phone_1_type', 'phone_2', 'phone_2_type', 'phone_3', 'phone_3_type', 'email_1', 'email_2',
             'status', 'exclusive_client', 'delivered_at', 'delivery_channel'], ',', '"', '\\');
         foreach ($rows as $p) {
-            $sig = Db::all('SELECT type, source_ref, event_date FROM signals WHERE parcel_id = ? AND active = 1', [$p['parcel_id']]);
+            $sig = Db::all('SELECT type, source_ref, event_date, amount FROM signals WHERE parcel_id = ? AND active = 1', [$p['parcel_id']]);
             $sigTxt = implode(' | ', array_map([Motivators::class, 'label'], Motivators::evaluate($p, $sig)));
             $contact = Db::one("SELECT * FROM contacts WHERE parcel_id = ? ORDER BY contact_type = 'owner' DESC, id LIMIT 1", [$p['parcel_id']]);
             $phones = $emails = [];

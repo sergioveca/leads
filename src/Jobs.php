@@ -6,6 +6,7 @@ namespace Leads;
 use Leads\Sources\DetroitBlight;
 use Leads\Sources\DetroitSignals;
 use Leads\Sources\DetroitParcels;
+use Leads\Sources\MacombParcels;
 use Leads\Sources\Treasurer;
 
 /**
@@ -51,6 +52,7 @@ final class Jobs
             $this->pagedPass($key, fn(int $o) => DetroitSignals::page($key, $o), fn(string $t) => DetroitSignals::finishPass($key, $t), DetroitSignals::PAGE_SIZE);
         }
         $this->loop('detroit_parcels', fn() => DetroitParcels::batch(150), 6);
+        $this->loop(MacombParcels::JOB, fn() => MacombParcels::batch(150), 6);
         // Scores depend on today's date (tax foreclosure date passed? ticket in last 12 months?),
         // so everything is rescored once a month; April 1 turns "foreclosure pending" (+45) into +25.
         if (Db::setting('rescore_month') !== date('Y-m')) {
@@ -90,6 +92,10 @@ final class Jobs
         $unsynced = (int)Db::val("SELECT COUNT(*) FROM properties WHERE municipality = 'DETROIT' AND parcel_synced_at IS NULL");
         if ($unsynced > 0) {
             $left['detroit_parcels'] = number_format($unsynced) . ' parcels without owner data';
+        }
+        $unsynced = (int)Db::val("SELECT COUNT(*) FROM properties WHERE county = 'MACOMB' AND parcel_synced_at IS NULL");
+        if ($unsynced > 0) {
+            $left[MacombParcels::JOB] = number_format($unsynced) . ' Macomb parcels without owner data';
         }
         $unscored = (int)Db::val('SELECT COUNT(*) FROM properties WHERE needs_score = 1');
         if ($unscored > 0) {
