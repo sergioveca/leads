@@ -175,7 +175,10 @@ final class SkipTrace
     private static function store(string $pid, array $r, ?int $clientId): void
     {
         $now = gmdate('Y-m-d H:i:s');
-        $int = static fn($v) => ($v === null || $v === '') ? null : (int)round((float)$v);
+        $int = static fn($v) => ($v === null || $v === '' || !is_numeric($v) || abs((float)$v) > 2147483647) ? null : (int)round((float)$v);
+        // DealMachine can send absurd numbers (e.g. equity of -50,000% on a near-zero value with a loan): keep them inside the column ranges
+        $dec = static fn($v, float $max) => ($v === null || $v === '' || !is_numeric($v)) ? null : round(max(-$max, min($max, (float)$v)), 2);
+        $year = $int($r['year_built'] ?? null);
         Db::run(
             'UPDATE properties SET dm_property_id = ?, dm_estimated_value = ?, dm_equity_amount = ?, dm_equity_pct = ?, dm_loan_balance = ?, dm_owner_occupied = ?,
              dm_beds = ?, dm_baths = ?, dm_sqft = ?, dm_year_built = ?, dm_annual_tax = ?, dm_matched = 1, traced_at = ?, traced_by_client_id = ?, needs_score = 1,
@@ -183,10 +186,11 @@ final class SkipTrace
              WHERE parcel_id = ?',
             [
                 $r['dm_property_id'] ?? null, $int($r['estimated_value'] ?? null), $int($r['estimated_equity_amount'] ?? null),
-                isset($r['estimated_equity_percentage']) ? round((float)$r['estimated_equity_percentage'], 2) : null,
+                $dec($r['estimated_equity_percentage'] ?? null, 9999.99),
                 $int($r['total_estimated_loan_balance'] ?? null),
                 isset($r['owner_occupied']) ? ((bool)$r['owner_occupied'] ? 1 : 0) : null,
-                $r['num_bedrooms'] ?? null, $r['num_bathrooms'] ?? null, $int($r['living_area_sqft'] ?? null), $int($r['year_built'] ?? null),
+                $dec($r['num_bedrooms'] ?? null, 999.9), $dec($r['num_bathrooms'] ?? null, 999.9), $int($r['living_area_sqft'] ?? null),
+                ($year !== null && $year > 0 && $year < 3000) ? $year : null,
                 $int($r['annual_property_tax_amount'] ?? null), $now, $clientId,
                 mb_substr((string)($r['address'] ?? ''), 0, 190), $r['zip'] ?? null, $pid,
             ]
@@ -221,7 +225,7 @@ final class SkipTrace
                     [
                         $cid, $num, $ph['type'] ?? null, $ph['carrier'] ?? null,
                         array_key_exists('do_not_call', $ph) ? ((bool)$ph['do_not_call'] ? 1 : 0) : null,
-                        $ph['match_confidence'] ?? null, $ph['usage_2_months'] ?? null, $ph['usage_12_months'] ?? null, $now,
+                        $dec($ph['match_confidence'] ?? null, 999.999), $ph['usage_2_months'] ?? null, $ph['usage_12_months'] ?? null, $now,
                     ]
                 );
             }
