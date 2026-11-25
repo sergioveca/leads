@@ -287,7 +287,7 @@ $mq = static fn(array $in) => array_column(Db::all('SELECT p.parcel_id FROM prop
 // the real 2026 Macomb list is also loaded, so check the fixtures by inclusion
 $fxIds = ['01-13-21-202-024', '01-13-21-202-025', '01-13-21-202-026'];
 $macomb = $mq(['county' => 'macomb', 'min' => 0]);
-check(!array_diff($fxIds, $macomb) && (int)Db::val("SELECT COUNT(*) FROM properties WHERE county = 'MACOMB'") === count($macomb) + (int)Db::val("SELECT COUNT(*) FROM properties WHERE county = 'MACOMB' AND (is_excluded = 1 OR status IN ('dead','closed'))"), 'county filter (' . count($macomb) . ' Macomb leads)');
+check(!array_diff($fxIds, $macomb) && (int)Db::val("SELECT COUNT(*) FROM properties WHERE county = 'MACOMB'") === count($macomb) + (int)Db::val("SELECT COUNT(*) FROM properties WHERE county = 'MACOMB' AND is_excluded = 1"), 'county filter (' . count($macomb) . ' Macomb leads)');
 $bigs = array_intersect($fxIds, $mq(['county' => 'MACOMB', 'm' => ['tax_big' => 'all']]));
 check(array_values($bigs) === ['01-13-21-202-024', '01-13-21-202-025'], '"owes $5k+" motivator');
 [$sqlBig, $argsBig] = Motivators::sql('tax_big');
