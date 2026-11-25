@@ -146,7 +146,8 @@ switch (true) {
         [$where, $params] = LeadQuery::where($f, $user);
         $total = (int)Db::val("SELECT COUNT(*) FROM properties p WHERE $where", $params);
         $page = max(1, (int)($_GET['page'] ?? 1));
-        $per = in_array((int)($_GET['per'] ?? 50), [50, 100, 250], true) ? (int)$_GET['per'] : 50;
+        $per = (int)($_GET['per'] ?? 50);
+        $per = in_array($per, [50, 100, 250], true) ? $per : 50;
         $rows = Db::all(
             "SELECT p.*, xc.name AS exclusive_client, (SELECT GROUP_CONCAT(DISTINCT s.type) FROM signals s WHERE s.parcel_id = p.parcel_id AND s.active = 1) AS sig_types,
                     (SELECT COUNT(*) FROM contacts c JOIN phones ph ON ph.contact_id = c.id WHERE c.parcel_id = p.parcel_id AND COALESCE(ph.is_dnc,0) = 0) AS ok_phones
