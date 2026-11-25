@@ -53,7 +53,7 @@ final class Exports
             }
             [$first, $last] = self::names($r);
             $byPhone[$n] = [
-                'first_name' => $first, 'last_name' => $last, 'phone' => $n, 'address' => (string)$r['address'],
+                'first_name' => $first, 'last_name' => $last, 'phone' => $n, 'address' => self::fullAddress($r),
                 'city' => self::city($r), 'state' => 'MI', 'zip' => $val($r['zip']), 'county' => ucfirst(strtolower((string)$r['county'])),
                 'phone_type' => (string)$r['phone_type'], 'carrier' => $val($r['carrier']),
                 'phone_confidence' => $r['confidence'] !== null ? (string)(int)$r['confidence'] : '', 'phone_usage_12m' => $val($r['usage_12m']),
@@ -106,6 +106,17 @@ final class Exports
         }
         $nice = static fn(string $s): string => $s === strtoupper($s) ? ucwords(strtolower($s), " -'") : $s;
         return [$nice($first), $nice($last)];
+    }
+
+    /** "7296 Fenton St, Dearborn Heights, MI 48127": street in normal case, city, state, 5-digit zip. */
+    public static function fullAddress(array $p): string
+    {
+        $up = ['N', 'S', 'E', 'W', 'NE', 'NW', 'SE', 'SW', 'PO'];
+        $words = preg_split('/\s+/', trim((string)($p['address'] ?? ''))) ?: [];
+        $street = implode(' ', array_map(static fn($w) => in_array(strtoupper($w), $up, true) ? strtoupper($w) : ucfirst(strtolower($w)), $words));
+        $city = self::city($p);
+        $zip = substr(trim((string)($p['zip'] ?? '')), 0, 5);
+        return implode(', ', array_filter([$street, $city, 'MI' . ($zip !== '' ? ' ' . $zip : '')], static fn($x) => $x !== ''));
     }
 
     private static function city(array $p): string

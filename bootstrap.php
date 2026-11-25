@@ -7,7 +7,7 @@ declare(strict_types=1);
  */
 
 define('LEADS_ROOT', __DIR__);
-define('LEADS_VERSION', '1.6.1');
+define('LEADS_VERSION', '1.6.2');
 
 date_default_timezone_set('America/New_York'); // Miami time (Eastern), shown with EST/EDT
 mb_internal_encoding('UTF-8');
