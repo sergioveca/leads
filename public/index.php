@@ -348,6 +348,23 @@ switch (true) {
         }
         View::redirect((string)($_POST['back'] ?? '/leads'));
 
+    case $path === '/export-sms.csv' || $path === '/export-podio.csv':
+        $f = LeadQuery::filters($_GET);
+        $base = ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? 'leads.4-return.com');
+        $list = !empty($_GET['list']) ? Db::one('SELECT id, name FROM saved_lists WHERE id = ?', [(int)$_GET['list']]) : null;
+        $slug = $list ? preg_replace('/[^a-z0-9]+/', '-', strtolower($list['name'])) . '-' : '';
+        if ($path === '/export-sms.csv') {
+            [$rows, $leads] = \Leads\Exports::smsRows($f, $user, $base);
+            if ($list) {
+                Db::run('UPDATE saved_lists SET last_exported_at = UTC_TIMESTAMP(), last_new = 0 WHERE id = ?', [$list['id']]);
+            }
+            Auth::audit('export_sms', count($rows) . " numbers from $leads leads " . json_encode($f));
+            \Leads\Exports::send('sms-' . $slug . date('Ymd-His') . '.csv', \Leads\Exports::SMS_COLUMNS, $rows);
+        }
+        $rows = \Leads\Exports::podioRows($f, $user, $base);
+        Auth::audit('export_podio', count($rows) . ' leads ' . json_encode($f));
+        \Leads\Exports::send('podio-' . $slug . date('Ymd-His') . '.csv', \Leads\Exports::PODIO_COLUMNS, $rows);
+
     case $path === '/export.csv':
         $f = LeadQuery::filters($_GET);
         [$where, $params] = LeadQuery::where($f, $user);

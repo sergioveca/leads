@@ -236,6 +236,29 @@ check(count($sc) === count(\Leads\Suggestions::all()) && ($sc['fire'] ?? 0) === 
 check(LeadQuery::filters(['stack' => 1])['stack'] === 1, 'stack 1+ is allowed');
 echo 'suggestion counts: ' . json_encode($sc) . PHP_EOL;
 
+// ---------------------------------------------------------------- SMS and Podio exports
+$addContact = static function (string $pid, string $first, string $last, array $phones) use ($now): void {
+    Db::run("INSERT INTO contacts (parcel_id, dm_person_id, full_name, first_name, last_name, contact_type, created_at) VALUES (?, ?, ?, ?, ?, 'owner', ?)",
+        [$pid, 'dm-' . $pid, strtoupper("$first $last"), strtoupper($first), strtoupper($last), $now]);
+    $cid = (int)Db::pdo()->lastInsertId();
+    foreach ($phones as [$num, $type, $dnc]) {
+        Db::run('INSERT INTO phones (contact_id, number, phone_type, is_dnc, confidence) VALUES (?, ?, ?, ?, 90)', [$cid, $num, $type, $dnc]);
+    }
+};
+$addContact('T-RENT-BAD.', 'Mary', 'Jones', [['3135550001', 'wireless', 0], ['3135550002', 'wireless', 1], ['3135550003', 'landline', 0], ['3135550004', 'wireless', 0]]);
+$addContact('T-ESTATE.', 'Mary', 'Jones', [['3135550001', 'wireless', 0]]); // same person, second property
+Db::run("INSERT INTO opt_outs (value, kind, created_at) VALUES ('3135550004', 'phone', UTC_TIMESTAMP())");
+Pipeline::update('T-RENT-BAD.', 'contacted', 'Replied YES to text, wants 60k, call after 5pm', $admin);
+$fx = LeadQuery::filters(['view' => 'all', 'status' => 'any', 'min' => 0, 'q' => 'TEST T-']);
+[$smsRows] = \Leads\Exports::smsRows($fx, $admin, 'https://leads.test');
+check(array_column($smsRows, 'phone') === ['3135550001'], 'SMS export: only mobile, not DNC, not opted out, each number once');
+check(array_slice(\Leads\Exports::SMS_COLUMNS, 0, 4) === ['first_name', 'last_name', 'phone', 'address'], 'SMS columns start with first_name, last_name, phone, address');
+check(($smsRows[0]['first_name'] ?? '') === 'Mary' && ($smsRows[0]['last_name'] ?? '') === 'Jones' && str_contains((string)($smsRows[0]['other_properties'] ?? ''), 'TEST'), 'SMS row: proper-case name, other property listed');
+$podio = \Leads\Exports::podioRows(LeadQuery::filters(['view' => 'all', 'status' => 'any', 'min' => 0, 'q' => 'T-RENT-BAD.']), $admin, 'https://leads.test');
+check(count($podio) === 1 && $podio[0]['phone_1'] !== '' && str_contains($podio[0]['notes'], 'wants 60k') && str_contains($podio[0]['motivators'], 'Rental without compliance cert')
+    && !str_contains($podio[0]['phone_1'] . $podio[0]['phone_2'] . $podio[0]['phone_3'], '555-0002') && !str_contains($podio[0]['phone_1'] . $podio[0]['phone_2'] . $podio[0]['phone_3'], '555-0004'),
+    'Podio export: callable phones only, notes and motivators included');
+
 // ---------------------------------------------------------------- Macomb county list
 // real Macomb BSA ids (from the Dec 2025 notice); tests/sources_live.php syncs their owners from the county layer
 $mfile = LEADS_ROOT . '/data/treasurer/macomb_forfeited_2099.csv';

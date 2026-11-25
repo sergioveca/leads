@@ -120,6 +120,8 @@ $sugNow = isset($_GET['s'], $sugs[(string)$_GET['s']]) ? (string)$_GET['s'] : ''
       <button type="submit">Filter</button>
       <a class="btn secondary" href="/leads<?= $f['view'] !== 'pool' ? '?view=' . e($f['view']) : '' ?>">Reset</a>
       <a class="btn secondary" href="/export.csv?<?= e($qsNow . ($list ? '&list=' . (int)$list['id'] : '')) ?>" title="Up to 5,000 rows, highest score first; DNC and opted-out numbers removed">Export CSV</a>
+      <a class="btn secondary" href="/export-sms.csv?<?= e($qsNow . ($list ? '&list=' . (int)$list['id'] : '')) ?>" title="One row per textable mobile number (wireless, not DNC, not opted out), first_name, last_name, phone, address first. Only skip-traced leads have numbers.">Export for SMS</a>
+      <a class="btn secondary" href="/export-podio.csv?<?= e($qsNow . ($list ? '&list=' . (int)$list['id'] : '')) ?>" title="One row per lead with phones, emails, motivators, score reasons and your notes, for importing into Podio">Export for Podio</a>
     </div>
   </form>
   <form method="post" action="/lists/save" class="filters" style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">

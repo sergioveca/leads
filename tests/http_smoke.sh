@@ -66,6 +66,13 @@ curl -sS -b "$JAR" -c "$JAR" -o /dev/null --data-urlencode "_csrf=$TOKEN" --data
   --data-urlencode "status=offer" --data-urlencode "note=Offered 35k via HTTP test" "$BASE/lead/update"
 page "/lead?id=$PID" "Offered 35k via HTTP test"
 
+# SMS and Podio exports download with the right headers
+curl -sS -b "$JAR" -o "$JAR.csv" "$BASE/export-sms.csv?view=all&status=any&min=0"; HDR=$(head -1 "$JAR.csv")
+if [[ "$HDR" == first_name,last_name,phone,address,* ]]; then echo "ok   export-sms.csv header"; else echo "FAIL export-sms.csv header: $HDR"; fails=$((fails+1)); fi
+curl -sS -b "$JAR" -o "$JAR.csv" "$BASE/export-podio.csv?view=all&status=contacted&min=0"; HDR=$(head -1 "$JAR.csv")
+if [[ "$HDR" == title,owner_name,contact_name,phone_1,* ]]; then echo "ok   export-podio.csv header"; else echo "FAIL export-podio.csv header: $HDR"; fails=$((fails+1)); fi
+page "/leads" "Export for SMS"
+
 # export includes the new columns
 curl -sS -b "$JAR" -o "$JAR.csv" "$BASE/export.csv?view=delivered&status=any"; HDR=$(head -1 "$JAR.csv")
 if grep -q 'status,exclusive_client,delivered_at,delivery_channel' <<<"$HDR"; then echo "ok   export.csv columns"; else echo "FAIL export.csv header: $HDR"; fails=$((fails+1)); fi
