@@ -12,6 +12,8 @@ require dirname(__DIR__) . '/bootstrap.php';
 use Leads\Db;
 use Leads\LeadQuery;
 use Leads\Pipeline;
+use Leads\Podio;
+use Leads\PodioSeller;
 use Leads\Scoring;
 use Leads\Sources\Treasurer;
 
@@ -270,6 +272,58 @@ Db::run("UPDATE properties SET dm_address = '618 Gladstone St', dm_city = 'Detro
 check(($smsRows[0]['address'] ?? '') === '618 Gladstone St, Detroit, MI 48202', 'SMS address uses DealMachine street: ' . ($smsRows[0]['address'] ?? ''));
 check(\Leads\Exports::fullAddress(['address' => '618 GLADSTONE', 'municipality' => 'DETROIT', 'zip' => '48202', 'dm_address' => '', 'dm_city' => null]) === '618 Gladstone, Detroit, MI 48202', 'empty DealMachine address falls back to the county');
 check(isset(\Leads\Jobs::pending()['dm_address_backfill']) === false, 'no address backfill without a DealMachine key');
+
+// ---------------------------------------------------------------- New Podio Seller (no network: fake Podio app)
+$fakeApp = ['app_id' => 1, 'space_id' => 9, 'name' => 'Seller Leads', 'fields' => [
+    ['id' => 1, 'external_id' => 'seller-contact', 'type' => 'app', 'label' => 'Seller Contact', 'required' => false, 'options' => [], 'multiple' => false, 'apps' => [2]],
+    ['id' => 2, 'external_id' => 'lead-manager', 'type' => 'contact', 'label' => 'Lead Manager', 'required' => false, 'options' => [], 'multiple' => false, 'apps' => []],
+    ['id' => 3, 'external_id' => 'lead-source', 'type' => 'category', 'label' => ' Lead Source', 'required' => false, 'options' => [['id' => 11, 'text' => 'Other'], ['id' => 12, 'text' => '4Return - County Leads APP']], 'multiple' => false, 'apps' => []],
+    ['id' => 4, 'external_id' => 'value', 'type' => 'money', 'label' => 'Property Value (TotalView)', 'required' => false, 'options' => [], 'multiple' => false, 'apps' => []],
+    ['id' => 5, 'external_id' => 'beds', 'type' => 'number', 'label' => 'Bedroom count', 'required' => false, 'options' => [], 'multiple' => false, 'apps' => []],
+    ['id' => 6, 'external_id' => 'occ', 'type' => 'category', 'label' => 'Is the property currently owner occupied, tenant occupied or vacant?', 'required' => false, 'options' => [['id' => 21, 'text' => 'Tenant'], ['id' => 22, 'text' => 'Vacant']], 'multiple' => false, 'apps' => []],
+    ['id' => 7, 'external_id' => 'phone', 'type' => 'phone', 'label' => 'Phone Number', 'required' => false, 'options' => [], 'multiple' => false, 'apps' => []],
+    ['id' => 8, 'external_id' => 'came-in', 'type' => 'date', 'label' => 'Date Lead Came In', 'required' => false, 'options' => [], 'multiple' => false, 'apps' => []],
+    ['id' => 9, 'external_id' => 'calc', 'type' => 'calculation', 'label' => 'Avg Value (TotalView & Zillow)', 'required' => false, 'options' => [], 'multiple' => false, 'apps' => []],
+    ['id' => 10, 'external_id' => 'motivation', 'type' => 'text', 'label' => 'Motivation', 'required' => false, 'options' => [], 'multiple' => false, 'apps' => []],
+]];
+$lookups = [];
+[$pf, $pw] = Podio::fields($fakeApp, [
+    'Seller Contact' => 555, 'Lead Manager' => 'Tom ACQ', 'Lead Source' => '4return - county leads app', 'Property Value (TotalView)' => '85000',
+    'Bedroom count' => '3', 'Is the property currently owner occupied, tenant occupied or vacant?' => ['Tenant Occupied', 'Tenant'],
+    'Phone Number' => '(313) 555-0001', 'Date Lead Came In' => '2026-11-25 10:30', 'Avg Value (TotalView & Zillow)' => '1', 'Motivation' => 'Tax foreclosure',
+    'Not A Field' => 'x', 'Years Owned' => '',
+], static function (string $kind, array $f, string $name) use (&$lookups) {
+    $lookups[] = "$kind:$name";
+    return $kind === 'contact' && $name === 'Tom ACQ' ? 777 : null;
+});
+check(($pf['seller-contact'] ?? null) === [555] && ($pf['lead-manager'] ?? null) === [777] && ($pf['lead-source'] ?? null) === [12], 'Podio: app reference, contact lookup, category by label text (case/spacing ignored)');
+check(($pf['value'] ?? null) === ['value' => '85000', 'currency' => 'USD'] && ($pf['beds'] ?? null) === '3' && ($pf['occ'] ?? null) === [21], 'Podio: money, number, category candidate list');
+check(($pf['phone'] ?? null) === [['type' => 'mobile', 'value' => '+13135550001']] && ($pf['came-in'] ?? null) === ['start' => '2026-11-25 10:30:00'] && ($pf['motivation'] ?? '') === 'Tax foreclosure', 'Podio: phone as mobile, date, text');
+check(!isset($pf['calc']) && count($pw) === 2 && str_contains(implode('|', $pw), 'Not A Field') && str_contains(implode('|', $pw), 'Avg Value'), 'Podio: calculated and unknown fields reported, empty skipped: ' . json_encode($pw));
+
+$thread = [
+    ['direction' => 'outbound', 'body' => 'Hi Mary, would you sell 618 Gladstone?', 'created_at' => '2026-11-25 14:00:00'],
+    ['direction' => 'inbound', 'body' => 'Yes I would!', 'created_at' => '2026-11-25 15:30:00'],
+];
+$dr = PodioSeller::draft('3135550001', 'T-ESTATE.', '', $thread);
+$dd = $dr['draft'];
+check(count($dr['choices']) === 2 && $dd['parcel_id'] === 'T-ESTATE.' && $dd['name'] === 'Mary Jones' && $dd['address'] === '618 Gladstone St, Detroit, MI 48202', 'Podio draft: owner with 2 properties, picked one, name and full address: ' . json_encode([$dd['name'], $dd['address']]));
+check($dd['reply'] === 'Reply: "Yes I would!"' && $dd['lead_came_in'] === date('Y-m-d H:i', strtotime('2026-11-25 15:30:00 UTC')), 'Podio draft: reply comment and date lead came in (Miami time)');
+check($dd['value'] === '85000' && $dd['paid_off'] === 'Yes' && $dd['beds'] === '3' && str_contains($dd['notes'], '/lead?id=T-ESTATE.') && $dd['county'] === 'Wayne', 'Podio draft: DealMachine value, paid off, beds, Leads link, county');
+check(PodioSeller::sellerValues($dd, 555)['Seller Contact'] === 555 && PodioSeller::sellerValues($dd, 555)['Property Paid off?'][0] === 'Yes' && PodioSeller::contactValues($dd)['Contact Type'] === 'Seller', 'Podio values for both apps');
+check(PodioSeller::sameStreet('15517 Lauder St, Detroit, MI 48227', '15517 LAUDER') && !PodioSeller::sameStreet('15517 Lauder St', '15519 LAUDER'), 'Slack address matches the county address');
+try {
+    PodioSeller::create($dd, $admin);
+    check(false, 'create without Podio credentials refuses');
+} catch (\RuntimeException $e) {
+    check(str_contains($e->getMessage(), 'PODIO_CLIENT_ID'), 'create without Podio credentials refuses');
+}
+\Leads\Exports::logSms($smsRows, 'Hot leads: individuals, houses (score 70+)');
+check(PodioSeller::draft('3135550001', null, '', [])['draft']['list_type'] === 'Hot leads: individuals, houses (score 70+)', 'SMS export remembers the list name for Podio List Type');
+Db::run("INSERT INTO podio_pushes (parcel_id, phone, seller_url, created_at) VALUES ('T-ESTATE.', '3135550001', 'https://podio.com/x', UTC_TIMESTAMP())");
+[$smsRows] = \Leads\Exports::smsRows($fx, $admin, 'https://leads.test');
+check($smsRows === [] && PodioSeller::draft('3135550001')['pushed'] !== null, 'a number sent to Podio leaves future SMS exports and shows as already sent');
+Db::run("DELETE FROM podio_pushes");
 
 // ---------------------------------------------------------------- Macomb county list
 // real Macomb BSA ids (from the Dec 2025 notice); tests/sources_live.php syncs their owners from the county layer

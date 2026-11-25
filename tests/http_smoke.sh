@@ -70,6 +70,10 @@ page "/lead?id=$PID" "Offered 35k via HTTP test"
 curl -sS -b "$JAR" -o "$JAR.csv" "$BASE/export-sms.csv?view=all&status=any&min=0"; HDR=$(head -1 "$JAR.csv")
 if [[ "$HDR" == first_name,last_name,phone,address,* ]]; then echo "ok   export-sms.csv header"; else echo "FAIL export-sms.csv header: $HDR"; fails=$((fails+1)); fi
 page "/leads" "Export for SMS"
+page "/podio/new?phone=3135550001&address=618%20Gladstone" "Create in Podio"
+page "/podio/new" "it needs the seller"
+page "/podio/check" "Not connected"
+page "/lead?id=$PID" "Exclusive to"
 
 # export includes the new columns
 curl -sS -b "$JAR" -o "$JAR.csv" "$BASE/export.csv?view=delivered&status=any"; HDR=$(head -1 "$JAR.csv")

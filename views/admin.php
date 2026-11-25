@@ -81,6 +81,7 @@
 
 <div class="card">
   <h2 style="margin-top:0">Clients &amp; DealMachine keys</h2>
+  <p class="small">Home Detroit Podio: <?= \Leads\Podio::configured() ? 'connected' : 'not connected (PODIO_* in .env)' ?> · <a href="/podio/check">check fields</a></p>
   <p class="mute small">A client with its own DealMachine API key is traced on its own credits. Without one, 4Return's key (from <code>.env</code>) is used. Keys are stored encrypted and never shown again.</p>
   <table>
     <tr><th>Client</th><th>Own key</th><th>Monthly cap</th><th>Update</th></tr>

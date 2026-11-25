@@ -121,7 +121,8 @@
               <td class="nowrap"><?= $blocked ? '<s>' . e(phone_fmt($ph['number'])) . '</s>' : '<a href="tel:+1' . e($ph['number']) . '">' . e(phone_fmt($ph['number'])) . '</a>' ?></td>
               <td><span class="chip"><?= e($ph['phone_type'] ?? '?') ?></span><?php if ($ph['opted_out']): ?><span class="chip dnc">Opted out</span><?php elseif ($ph['is_dnc']): ?><span class="chip dnc">DNC</span><?php else: ?><span class="chip okc">OK to call</span><?php endif; ?></td>
               <td class="small mute hide-sm"><?= e($ph['carrier'] ?? '') ?> · <?= $ph['confidence'] !== null ? (int)$ph['confidence'] . '% match' : '' ?> · use <?= e($ph['usage_12m'] ?? '?') ?></td>
-              <td><?php if (!$ph['opted_out']): ?><form method="post" action="/optout" onsubmit="return confirm('Mark this number do-not-contact for everyone?')"><?= csrf_field() ?><input type="hidden" name="value" value="<?= e($ph['number']) ?>"><input type="hidden" name="back" value="<?= e($back) ?>"><button class="link small">Opt out</button></form><?php endif; ?></td>
+              <td><?php if (!$ph['opted_out']): ?><form method="post" action="/optout" onsubmit="return confirm('Mark this number do-not-contact for everyone?')"><?= csrf_field() ?><input type="hidden" name="value" value="<?= e($ph['number']) ?>"><input type="hidden" name="back" value="<?= e($back) ?>"><button class="link small">Opt out</button></form><?php endif; ?>
+                <?php if ($isAdmin && !$blocked && $ph['phone_type'] === 'wireless'): ?><a class="small" href="/podio/new?phone=<?= e($ph['number']) ?>&amp;pid=<?= e(urlencode($p['parcel_id'])) ?>" title="Create the Contact and Seller Lead in Home Detroit's Podio">Send to Podio</a><?php endif; ?></td>
             </tr>
             <?php endforeach; ?>
             <?php foreach ($c['emails'] as $em): ?>

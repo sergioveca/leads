@@ -35,6 +35,7 @@ final class Exports
              JOIN phones ph ON ph.contact_id = c.id
              LEFT JOIN opt_outs o ON o.value = ph.number
              WHERE $where AND ph.phone_type = 'wireless' AND COALESCE(ph.is_dnc, 0) = 0 AND o.id IS NULL
+               AND NOT EXISTS (SELECT 1 FROM podio_pushes pp WHERE pp.phone = ph.number OR pp.parcel_id = p.parcel_id)
              ORDER BY " . LeadQuery::order($f['sort']) . ", (c.contact_type = 'owner') DESC, ph.confidence DESC
              LIMIT " . (int)$limit,
             $params
@@ -75,6 +76,17 @@ final class Exports
             ];
         }
         return [array_values($byPhone), count($motiv)];
+    }
+
+    /** Remembers which list each exported number came from (Podio "List Type"). */
+    public static function logSms(array $rows, string $listName): void
+    {
+        $now = gmdate('Y-m-d H:i:s');
+        foreach (array_chunk($rows, 500) as $chunk) {
+            Db::upsert('sms_export_log', array_map(static fn($r) => [
+                'phone' => $r['phone'], 'parcel_id' => $r['parcel_id'], 'list_name' => mb_substr($listName, 0, 120), 'exported_at' => $now,
+            ], $chunk), ['list_name', 'exported_at']);
+        }
     }
 
     /** @return array<string,string> parcel_id => "Label | Label" */

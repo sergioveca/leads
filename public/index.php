@@ -357,6 +357,7 @@ switch (true) {
         if ($list) {
             Db::run('UPDATE saved_lists SET last_exported_at = UTC_TIMESTAMP(), last_new = 0 WHERE id = ?', [$list['id']]);
         }
+        \Leads\Exports::logSms($rows, $list['name'] ?? (\Leads\Suggestions::all()[(string)($_GET['s'] ?? '')]['name'] ?? 'Leads search'));
         Auth::audit('export_sms', count($rows) . " numbers from $leads leads " . json_encode($f));
         \Leads\Exports::send('sms-' . $slug . date('Ymd-His') . '.csv', \Leads\Exports::SMS_COLUMNS, $rows);
 
@@ -480,6 +481,54 @@ switch (true) {
         $log = (new Jobs($budget))->run();
         View::flash('Ran jobs: ' . implode(' · ', $log) ?: 'nothing to do');
         View::redirect('/admin');
+
+    // ---------------------------------------------------------------- New Podio Seller (Slack button / lead page)
+    case $path === '/podio/new':
+        Auth::require(true);
+        $phone = \Leads\PodioSeller::phone10((string)($_GET['phone'] ?? ''));
+        $messages = strlen($phone) === 10 ? \Leads\PodioSeller::messages($phone) : [];
+        $r = \Leads\PodioSeller::draft($phone, isset($_GET['pid']) && $_GET['pid'] !== '' ? (string)$_GET['pid'] : null, (string)($_GET['address'] ?? ''), $messages);
+        View::render('podio', $r + ['error' => null, 'done' => null, 'configured' => \Leads\Podio::configured()], 'New Podio Seller');
+        break;
+
+    case $path === '/podio/create' && $method === 'POST':
+        Auth::require(true);
+        $d = ['phone' => (string)($_POST['phone'] ?? ''), 'parcel_id' => (string)($_POST['parcel_id'] ?? '')];
+        foreach (array_keys(\Leads\PodioSeller::FORM) as $k) {
+            $d[$k] = trim((string)($_POST[$k] ?? ''));
+        }
+        $phone = \Leads\PodioSeller::phone10($d['phone']);
+        $done = $error = null;
+        try {
+            $done = \Leads\PodioSeller::create($d, $user);
+        } catch (\Throwable $e) {
+            $error = $e->getMessage();
+            \Leads\Log::error('podio create: ' . $error);
+        }
+        $pushed = Db::one('SELECT * FROM podio_pushes WHERE phone = ? ORDER BY id DESC LIMIT 1', [$phone]);
+        View::render('podio', ['draft' => $d, 'choices' => \Leads\PodioSeller::properties($phone), 'pushed' => $done ? null : $pushed, 'messages' => [],
+            'error' => $error, 'done' => $done, 'configured' => \Leads\Podio::configured()], 'New Podio Seller');
+        break;
+
+    case $path === '/podio/check':
+        Auth::require(true);
+        $check = ['configured' => \Leads\Podio::configured(), 'apps' => [], 'error' => null];
+        if ($check['configured']) {
+            try {
+                if (!empty($_GET['refresh'])) {
+                    Db::run("DELETE FROM settings WHERE `key` LIKE 'podio_app_%'");
+                }
+                $sample = \Leads\PodioSeller::draft('0000000000');
+                $check['apps'] = [
+                    ['app' => \Leads\Podio::app(\Leads\PodioSeller::contactsApp()), 'want' => array_keys(\Leads\PodioSeller::contactValues($sample['draft']))],
+                    ['app' => \Leads\Podio::app(\Leads\PodioSeller::sellerApp()), 'want' => array_keys(\Leads\PodioSeller::sellerValues($sample['draft'], 0))],
+                ];
+            } catch (\Throwable $e) {
+                $check['error'] = $e->getMessage();
+            }
+        }
+        View::render('podio_check', $check, 'Podio connection');
+        break;
 
     case $path === '/admin/optout-remove' && $method === 'POST':
         Auth::require(true);

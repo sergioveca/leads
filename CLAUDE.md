@@ -16,6 +16,7 @@ Motivated-seller lead engine for 4Return (wholesaling) and its clients (first cl
 - City of Detroit ArcGIS: `blight_tickets` (aggregated per parcel) and `parcel_file_current` (owner, mailing, tax status). Also (`src/Sources/DetroitSignals.php`, daily paged passes): building fires, vacant registry, demolitions, rental registrations + compliance certificates, and assessor sales for sheriff's deeds (mortgage foreclosure, in redemption) and estate transfers.
 - Lists (`docs/lists.md`): motivators in `src/Motivators.php` (SQL + PHP, kept in sync by tests). Leads page picker: Must / Any of / Exclude + stacked count. Saved lists (`saved_lists`, 10 starter lists) with hourly counts and "new since last export".
 - Detroit Legal News (mortgage foreclosure + probate notices) forbids robots in its Terms of Use: no scraping. Pending: written permission/feed, or a manual Excel export uploaded into Leads.
+- **New Podio Seller** (`docs/podio.md`, migration 007): Slack #hd-acq-replies button → review page `/podio/new` → Contact + Seller Lead in Home Detroit's Podio (signed in as the user's own Podio login, PODIO_* in .env), reply as comment, lead set to Contacted and left out of SMS exports. `/podio/check` shows the field mapping.
 - DealMachine API (`docs/dealmachine.md`): enrichment by APN (Wayne FIPS 26163) with address fallback; ~2 credits/match, misses and repeats free; DNC check free.
 
 ## Decisions so far
